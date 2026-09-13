@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Stash – spara idéer du hittar",
+  "version": "0.1.0",
+  "description": "Markera text på valfri sida, spara den som ett kort, bläddra i ditt bibliotek och repetera dina bästa fynd senare.",
+  "permissions": ["contextMenus", "storage"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Stash"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

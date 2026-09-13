@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="styles.css">
+  <style>body { width: 320px; }</style>
+</head>
+<body>
+  <h1>Stash</h1>
+
+  <div class="links">
+    <a href="#" id="open-library">Bibliotek</a>
+    <a href="#" id="open-review">Repetera (<span id="due-count">0</span>)</a>
+  </div>
+
+  <textarea id="new-text" rows="3" placeholder="Skriv eller klistra in något att spara…"></textarea>
+  <input type="text" id="new-tags" placeholder="Taggar, kommaseparerat (valfritt)">
+  <button class="primary" id="save-btn">Spara kort</button>
+
+  <h2 style="font-size:13px;color:#888;margin-top:16px;">Senast sparat</h2>
+  <div id="recent-list"></div>
+
+  <script src="storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

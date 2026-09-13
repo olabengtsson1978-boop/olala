@@ -1,5 +1,8 @@
 let allCards = [];
+let allStashes = [];
 let activeTag = null;
+const INBOX = "__inbox__";
+let activeStash = null; // null = alla, INBOX = inkorgen, annars stash-id
 
 function escapeHtml(str) {
   const div = document.createElement("div");
@@ -19,8 +22,71 @@ function matches(card, query) {
   return haystack.includes(query.toLowerCase());
 }
 
+function matchesStash(card) {
+  if (activeStash === null) return true;
+  if (activeStash === INBOX) return !card.stashId;
+  return card.stashId === activeStash;
+}
+
+function stashOptionsHtml(selectedId) {
+  const inboxSelected = !selectedId ? "selected" : "";
+  const options = allStashes
+    .map(
+      (s) =>
+        `<option value="${escapeHtml(s.id)}" ${s.id === selectedId ? "selected" : ""}>${escapeHtml(s.name)}</option>`
+    )
+    .join("");
+  return `<option value="" ${inboxSelected}>Inkorgen</option>${options}`;
+}
+
+function renderStashFilters() {
+  const el = document.getElementById("stash-filters");
+  const allChip = `<span class="tag" data-stash="__all__" style="cursor:pointer;${
+    activeStash === null ? "background:#2b6cb0;color:#fff;" : ""
+  }">Alla</span>`;
+  const inboxChip = `<span class="tag stash-chip" data-stash="${INBOX}" style="cursor:pointer;${
+    activeStash === INBOX ? "background:#2b6cb0;color:#fff;" : ""
+  }">Inkorgen</span>`;
+  const stashChips = allStashes
+    .map(
+      (s) => `
+      <span class="stash-row">
+        <span class="tag stash-chip" data-stash="${escapeHtml(s.id)}" style="cursor:pointer;${
+        activeStash === s.id ? "background:#2b6cb0;color:#fff;" : ""
+      }">${escapeHtml(s.name)}</span>
+        <button class="remove-stash" data-remove-stash="${escapeHtml(s.id)}" title="Ta bort stash">×</button>
+      </span>`
+    )
+    .join("");
+
+  el.innerHTML = allChip + inboxChip + stashChips;
+
+  el.querySelectorAll("[data-stash]").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const val = chip.dataset.stash;
+      activeStash = val === "__all__" ? null : activeStash === val ? null : val;
+      render();
+    });
+  });
+
+  el.querySelectorAll("[data-remove-stash]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.removeStash;
+      if (!confirm("Ta bort den här stashen? Korten flyttas till Inkorgen.")) return;
+      await deleteStash(id);
+      allStashes = await getAllStashes();
+      allCards = await getAllCards();
+      if (activeStash === id) activeStash = null;
+      render();
+    });
+  });
+}
+
 function render() {
   const query = document.getElementById("search").value.trim();
+
+  renderStashFilters();
 
   const tagFilters = document.getElementById("tag-filters");
   tagFilters.innerHTML = allTags(allCards)
@@ -40,7 +106,7 @@ function render() {
   });
 
   const filtered = allCards.filter(
-    (c) => matches(c, query) && (!activeTag || c.tags.includes(activeTag))
+    (c) => matches(c, query) && (!activeTag || c.tags.includes(activeTag)) && matchesStash(c)
   );
 
   const list = document.getElementById("list");
@@ -69,6 +135,9 @@ function render() {
             c.tags.join(", ")
           )}">
           <button class="save-tags">Spara taggar</button>
+        </div>
+        <div class="row">
+          <select class="card-stash">${stashOptionsHtml(c.stashId)}</select>
           <button class="danger delete-card">Ta bort</button>
         </div>
       </div>`
@@ -94,11 +163,76 @@ function render() {
       render();
     })
   );
+
+  list.querySelectorAll(".card-stash").forEach((select) =>
+    select.addEventListener("change", async (e) => {
+      const cardEl = e.target.closest(".card");
+      const id = cardEl.dataset.id;
+      await updateCardStash(id, select.value || null);
+      allCards = await getAllCards();
+      render();
+    })
+  );
 }
 
 document.getElementById("search").addEventListener("input", render);
 
+document.getElementById("add-stash-btn").addEventListener("click", async () => {
+  const input = document.getElementById("new-stash-name");
+  const name = input.value.trim();
+  if (!name) return;
+  await createStash(name);
+  input.value = "";
+  allStashes = await getAllStashes();
+  render();
+});
+
+document.getElementById("export-btn").addEventListener("click", async (e) => {
+  e.preventDefault();
+  const backup = await exportBackup();
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `stash-backup-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById("import-btn").addEventListener("click", (e) => {
+  e.preventDefault();
+  document.getElementById("import-file").click();
+});
+
+document.getElementById("import-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    alert("Filen kunde inte tolkas som JSON.");
+    return;
+  }
+  if (!confirm("Detta ersätter allt nuvarande innehåll i Stash med filens innehåll. Fortsätta?")) return;
+  try {
+    await importBackup(data);
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  allCards = await getAllCards();
+  allStashes = await getAllStashes();
+  activeTag = null;
+  activeStash = null;
+  render();
+  e.target.value = "";
+});
+
 (async () => {
   allCards = await getAllCards();
+  allStashes = await getAllStashes();
   render();
 })();

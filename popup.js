@@ -30,9 +30,18 @@ async function renderDueCount() {
   document.getElementById("due-count").textContent = due.length;
 }
 
+async function renderStashOptions() {
+  const stashes = await getAllStashes();
+  const select = document.getElementById("new-stash");
+  select.innerHTML =
+    '<option value="">Inkorgen</option>' +
+    stashes.map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join("");
+}
+
 document.getElementById("save-btn").addEventListener("click", async () => {
   const textEl = document.getElementById("new-text");
   const tagsEl = document.getElementById("new-tags");
+  const stashEl = document.getElementById("new-stash");
   const text = textEl.value.trim();
   if (!text) return;
 
@@ -44,6 +53,7 @@ document.getElementById("save-btn").addEventListener("click", async () => {
     sourceTitle: tab?.title || "",
     sourceUrl: tab?.url || "",
     tags: tagsEl.value.split(","),
+    stashId: stashEl.value || null,
   });
 
   textEl.value = "";
@@ -64,3 +74,4 @@ document.getElementById("open-review").addEventListener("click", (e) => {
 
 renderRecent();
 renderDueCount();
+renderStashOptions();

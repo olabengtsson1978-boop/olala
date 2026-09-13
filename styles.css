@@ -50,7 +50,7 @@ h1 {
   border-radius: 999px;
 }
 
-textarea, input[type="text"] {
+textarea, input[type="text"], select {
   width: 100%;
   box-sizing: border-box;
   font-family: inherit;
@@ -59,6 +59,27 @@ textarea, input[type="text"] {
   border: 1px solid #ddd;
   border-radius: 6px;
   margin-bottom: 8px;
+  background: #fff;
+}
+
+.stash-chip {
+  background: #e5edf6;
+  color: #2b6cb0;
+}
+
+.stash-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stash-row .remove-stash {
+  font-size: 10px;
+  color: #b0342b;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0 2px;
 }
 
 button {

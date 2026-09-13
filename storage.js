@@ -2,6 +2,7 @@
 // (chrome.storage.local) – inget skickas till någon server.
 
 const STORAGE_KEY = "stashCards";
+const STASHES_KEY = "stashStashes";
 
 // Leitner-lådor: hur många dagar tills ett kort dyker upp igen
 // efter att man svarat "Kom ihåg" i den lådan.
@@ -22,7 +23,7 @@ async function saveAllCards(cards) {
   await chrome.storage.local.set({ [STORAGE_KEY]: cards });
 }
 
-async function addCard({ text, sourceTitle, sourceUrl, tags }) {
+async function addCard({ text, sourceTitle, sourceUrl, tags, stashId }) {
   const cards = await getAllCards();
   const now = Date.now();
   const card = {
@@ -31,6 +32,7 @@ async function addCard({ text, sourceTitle, sourceUrl, tags }) {
     sourceTitle: sourceTitle || "",
     sourceUrl: sourceUrl || "",
     tags: (tags || []).map((t) => t.trim().toLowerCase()).filter(Boolean),
+    stashId: stashId || null,
     createdAt: now,
     box: 1,
     nextReview: now,
@@ -54,12 +56,81 @@ async function updateCardTags(id, tags) {
   await saveAllCards(cards);
 }
 
+async function updateCardStash(id, stashId) {
+  const cards = await getAllCards();
+  const card = cards.find((c) => c.id === id);
+  if (!card) return;
+  card.stashId = stashId || null;
+  await saveAllCards(cards);
+}
+
+// Stashes = namngivna samlingar (som "decks" i DeepStash). Kort utan
+// stashId hör till den underförstådda "Inkorgen".
+
+async function getAllStashes() {
+  const data = await chrome.storage.local.get(STASHES_KEY);
+  return data[STASHES_KEY] || [];
+}
+
+async function saveAllStashes(stashes) {
+  await chrome.storage.local.set({ [STASHES_KEY]: stashes });
+}
+
+async function createStash(name) {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const stashes = await getAllStashes();
+  const stash = { id: uid(), name: trimmed };
+  stashes.push(stash);
+  await saveAllStashes(stashes);
+  return stash;
+}
+
+async function renameStash(id, name) {
+  const stashes = await getAllStashes();
+  const stash = stashes.find((s) => s.id === id);
+  if (!stash) return;
+  stash.name = name.trim();
+  await saveAllStashes(stashes);
+}
+
+async function deleteStash(id) {
+  const stashes = await getAllStashes();
+  await saveAllStashes(stashes.filter((s) => s.id !== id));
+
+  const cards = await getAllCards();
+  let changed = false;
+  cards.forEach((c) => {
+    if (c.stashId === id) {
+      c.stashId = null;
+      changed = true;
+    }
+  });
+  if (changed) await saveAllCards(cards);
+}
+
 async function getDueCards() {
   const cards = await getAllCards();
   const now = Date.now();
   return cards
     .filter((c) => c.nextReview <= now)
     .sort((a, b) => a.nextReview - b.nextReview);
+}
+
+async function exportBackup() {
+  return {
+    exportedAt: new Date().toISOString(),
+    cards: await getAllCards(),
+    stashes: await getAllStashes(),
+  };
+}
+
+async function importBackup(data) {
+  if (!data || !Array.isArray(data.cards)) {
+    throw new Error("Filen innehåller ingen giltig Stash-säkerhetskopia.");
+  }
+  await saveAllCards(data.cards);
+  await saveAllStashes(Array.isArray(data.stashes) ? data.stashes : []);
 }
 
 async function reviewCard(id, remembered) {

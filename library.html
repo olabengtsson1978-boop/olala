@@ -10,11 +10,22 @@
   <h1>Ditt bibliotek</h1>
   <div class="links">
     <a href="review.html">Gå till repetition</a>
+    <a href="#" id="export-btn">Exportera säkerhetskopia</a>
+    <a href="#" id="import-btn">Importera</a>
+    <input type="file" id="import-file" accept="application/json" hidden>
+  </div>
+
+  <h2 style="font-size:13px;color:#888;margin:0 0 6px;">Stashes</h2>
+  <div id="stash-filters" class="tags" style="margin-bottom:8px;"></div>
+  <div class="row">
+    <input type="text" id="new-stash-name" placeholder="Ny stash…">
+    <button id="add-stash-btn">Skapa</button>
   </div>
 
   <div class="row">
     <input type="text" id="search" placeholder="Sök i kort och taggar…">
   </div>
+  <h2 style="font-size:13px;color:#888;margin:0 0 6px;">Taggar</h2>
   <div id="tag-filters" class="tags" style="margin-bottom:14px;"></div>
 
   <div id="list"></div>

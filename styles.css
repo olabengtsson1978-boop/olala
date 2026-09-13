@@ -6,6 +6,33 @@ body {
   padding: 16px;
 }
 
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e2dc;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.nav .brand {
+  font-weight: 700;
+  color: #2b6cb0;
+  margin-right: 4px;
+}
+
+.nav a {
+  color: #666;
+  text-decoration: none;
+}
+
+.nav a.active {
+  color: #2b6cb0;
+  font-weight: 600;
+}
+
 h1 {
   font-size: 18px;
   margin: 0 0 12px;

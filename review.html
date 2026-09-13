@@ -2,15 +2,23 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stash – Repetition</title>
+  <meta name="theme-color" content="#2b6cb0">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon128.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <nav class="nav">
+    <span class="brand">Stash</span>
+    <a href="index.html">Upptäck</a>
+    <a href="library.html">Bibliotek</a>
+    <a href="review.html" class="active">Repetera</a>
+  </nav>
+
   <div class="review-box">
     <h1>Repetition</h1>
-    <div class="links" style="justify-content:center;">
-      <a href="library.html">Till biblioteket</a>
-    </div>
     <div class="progress" id="progress"></div>
     <div class="review-card" id="card-content">Laddar…</div>
     <div class="review-actions" id="actions"></div>
@@ -18,5 +26,10 @@
 
   <script src="storage.js"></script>
   <script src="review.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    }
+  </script>
 </body>
 </html>

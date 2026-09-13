@@ -2,14 +2,24 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stash – Bibliotek</title>
+  <meta name="theme-color" content="#2b6cb0">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon128.png">
   <link rel="stylesheet" href="styles.css">
   <style>body { max-width: 680px; margin: 0 auto; padding: 24px 16px; }</style>
 </head>
 <body>
+  <nav class="nav">
+    <span class="brand">Stash</span>
+    <a href="index.html">Upptäck</a>
+    <a href="library.html" class="active">Bibliotek</a>
+    <a href="review.html">Repetera</a>
+  </nav>
+
   <h1>Ditt bibliotek</h1>
   <div class="links">
-    <a href="review.html">Gå till repetition</a>
     <a href="#" id="export-btn">Exportera säkerhetskopia</a>
     <a href="#" id="import-btn">Importera</a>
     <input type="file" id="import-file" accept="application/json" hidden>
@@ -32,5 +42,10 @@
 
   <script src="storage.js"></script>
   <script src="library.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    }
+  </script>
 </body>
 </html>

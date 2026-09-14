@@ -1,18 +1,38 @@
-// Hämtar och tolkar RSS/Atom-flöden för "Upptäck"-vyn. Om ett flöde
-// blockerar CORS provar vi en publik läsproxy som andra hand.
+// Hämtar och tolkar RSS/Atom-flöden för "Upptäck"-vyn. De flesta
+// tidningars flöden blockerar CORS för direkta anrop från webbläsaren,
+// så vi provar flera publika läsproxyer i tur och ordning innan vi ger upp.
 
-const CORS_PROXY = "https://api.allorigins.win/raw?url=";
+const PROXY_BUILDERS = [
+  (url) => url,
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+];
+
+async function fetchWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function fetchFeedXml(url) {
-  try {
-    const res = await fetch(url, { mode: "cors" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-  } catch {
-    const res = await fetch(CORS_PROXY + encodeURIComponent(url));
-    if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
-    return await res.text();
+  const errors = [];
+  for (const build of PROXY_BUILDERS) {
+    try {
+      const res = await fetchWithTimeout(build(url), 8000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (!text.trim()) throw new Error("Tomt svar");
+      return text;
+    } catch (err) {
+      errors.push(err.name === "AbortError" ? "timeout" : err.message);
+    }
   }
+  throw new Error(errors.join(" / "));
 }
 
 function stripHtml(html) {

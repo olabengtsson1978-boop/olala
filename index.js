@@ -44,18 +44,35 @@ async function renderFeedList() {
   }
   el.innerHTML = feeds
     .map(
-      (f) => `
-      <div class="stash-row" style="margin-bottom:6px;">
+      (f, i) => `
+      <div class="stash-row" style="margin-bottom:6px;" data-feed-index="${i}">
         <span>${escapeHtml(f.name)}</span>
         <span class="card-source" style="flex:1;">${escapeHtml(f.url)}</span>
+        <button class="test-feed" data-test-feed="${escapeHtml(f.url)}" data-test-name="${escapeHtml(f.name)}">Testa</button>
         <button class="remove-stash" data-remove-feed="${escapeHtml(f.url)}" title="Ta bort flöde">×</button>
-      </div>`
+      </div>
+      <p class="muted" style="display:none;padding:0 0 6px;text-align:left;font-size:12px;" data-test-result></p>`
     )
     .join("");
   el.querySelectorAll("[data-remove-feed]").forEach((btn) =>
     btn.addEventListener("click", async () => {
       await removeFeed(btn.dataset.removeFeed);
       await renderFeedList();
+    })
+  );
+  el.querySelectorAll("[data-test-feed]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const resultEl = btn.closest(".stash-row").nextElementSibling;
+      resultEl.style.display = "block";
+      resultEl.textContent = "Testar…";
+      try {
+        const xml = await fetchFeedXml(btn.dataset.testFeed);
+        const items = parseFeedXml(xml, btn.dataset.testName);
+        const withImages = items.filter((it) => it.image).length;
+        resultEl.textContent = `OK – hittade ${items.length} artiklar (${withImages} med bild).`;
+      } catch (err) {
+        resultEl.textContent = `Misslyckades: ${err.message}`;
+      }
     })
   );
 }
@@ -144,7 +161,9 @@ async function loadSuggestions() {
   renderSuggestions(items);
 
   if (failures.length > 0) {
-    status.textContent = `Kunde inte hämta: ${failures.map((f) => f.feed.name).join(", ")}. Övriga flöden visas nedan.`;
+    status.innerHTML = failures
+      .map((f) => `Kunde inte hämta <strong>${escapeHtml(f.feed.name)}</strong>: ${escapeHtml(f.message)}`)
+      .join("<br>");
   } else if (items.length === 0) {
     status.textContent = "Inga nya förslag just nu.";
   } else {

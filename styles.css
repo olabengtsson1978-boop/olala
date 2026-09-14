@@ -89,6 +89,34 @@ textarea, input[type="text"], select {
   background: #fff;
 }
 
+.suggestion-card {
+  overflow: hidden;
+}
+
+.suggestion-image {
+  margin: -12px -14px 10px;
+  width: calc(100% + 28px);
+  height: 160px;
+  object-fit: cover;
+  display: block;
+  background: #eee;
+}
+
+.suggestion-image-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 40px;
+  font-weight: 700;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.source-badge {
+  color: #fff;
+  font-weight: 600;
+}
+
 .stash-chip {
   background: #e5edf6;
   color: #2b6cb0;

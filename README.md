@@ -45,11 +45,19 @@ till appen som en egen app.
 
 ## Flöden
 
-Standardflödena är exempel (Hacker News, SVT Nyheter, NASA). Lägg till
-egna RSS/Atom-URL:er under "Flöden som förslagen hämtas från" på
-Upptäck-sidan. Om ett flöde blockerar CORS provar appen automatiskt en
-publik läsproxy (`api.allorigins.win`) som andrahandsval – fungerar det
-inte heller visas en kort varning istället för att krascha.
+Standardflödena är valda för "spännande fakta"-känsla à la National
+Geographic/Illustrerad Vetenskap: Smithsonian (Vetenskap & Natur),
+ScienceDaily och NASA. Förslagen visas som magasinkort med bild (hämtad
+från flödets `<enclosure>`/`<media:content>` eller en bild i
+beskrivningen) och en färgad källbadge.
+
+Lägg till egna RSS/Atom-URL:er under "Flöden som förslagen hämtas från"
+på Upptäck-sidan – t.ex. Illustrerad Vetenskap om du hittar deras
+feed-URL (den är inte officiellt dokumenterad, så testa `illvet.se/feed`
+eller kolla sidkällan efter en `<link rel="alternate" type="application/rss+xml">`).
+Om ett flöde blockerar CORS provar appen automatiskt en publik
+läsproxy (`api.allorigins.win`) som andrahandsval – fungerar det inte
+heller visas en kort varning istället för att krascha.
 
 ## Struktur
 

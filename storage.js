@@ -14,9 +14,9 @@ const MAX_BOX = BOX_INTERVAL_DAYS.length - 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const DEFAULT_FEEDS = [
-  { name: "Hacker News", url: "https://hnrss.org/frontpage" },
-  { name: "SVT Nyheter", url: "https://www.svt.se/nyheter/rss.xml" },
-  { name: "NASA", url: "https://www.nasa.gov/feed/" },
+  { name: "Smithsonian", url: "https://www.smithsonianmag.com/rss/science-nature/" },
+  { name: "ScienceDaily", url: "https://feeds.sciencedaily.com/sciencedaily/top_news/top_science" },
+  { name: "NASA", url: "https://www.nasa.gov/rss/dyn/breaking_news.rss" },
 ];
 
 function uid() {

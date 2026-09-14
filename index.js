@@ -71,6 +71,14 @@ document.getElementById("add-feed-btn").addEventListener("click", async () => {
   await renderFeedList();
 });
 
+// Ger varje källa en stabil färg, så samma tidning/flöde alltid får
+// samma badge-färg (rent kosmetiskt, ingen faktisk kategorisering).
+function sourceColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 360;
+  return `hsl(${hash}, 55%, 42%)`;
+}
+
 function renderSuggestions(items) {
   const list = document.getElementById("suggestions-list");
   if (items.length === 0) {
@@ -79,18 +87,27 @@ function renderSuggestions(items) {
   }
 
   list.innerHTML = items
-    .map(
-      (it, i) => `
-      <div class="card" data-index="${i}">
-        <p class="card-text">${escapeHtml(it.title)}</p>
-        ${it.summary ? `<p style="font-size:13px;color:#666;margin:0 0 6px;">${escapeHtml(it.summary)}</p>` : ""}
-        <a class="card-source" href="${escapeHtml(it.link)}" target="_blank">${escapeHtml(it.source)}</a>
+    .map((it, i) => {
+      const color = sourceColor(it.source || "");
+      const imageHtml = it.image
+        ? `<img class="suggestion-image" src="${escapeHtml(it.image)}" alt="" loading="lazy" onerror="this.remove()">`
+        : `<div class="suggestion-image suggestion-image-fallback" style="background:${color};">${escapeHtml(
+            (it.source || "?").slice(0, 1)
+          )}</div>`;
+
+      return `
+      <div class="card suggestion-card" data-index="${i}">
+        ${imageHtml}
+        <span class="tag source-badge" style="background:${color};">${escapeHtml(it.source)}</span>
+        <p class="card-text" style="margin-top:8px;">${escapeHtml(it.title)}</p>
+        ${it.summary ? `<p style="font-size:13px;color:#666;margin:0 0 8px;">${escapeHtml(it.summary)}</p>` : ""}
+        <a class="card-source" href="${escapeHtml(it.link)}" target="_blank">Läs artikeln ↗</a>
         <div class="row" style="margin-top:10px;">
           <button class="primary save-suggestion">Spara</button>
           <button class="skip-suggestion">Hoppa över</button>
         </div>
-      </div>`
-    )
+      </div>`;
+    })
     .join("");
 
   list.querySelectorAll(".save-suggestion").forEach((btn) =>

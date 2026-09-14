@@ -21,6 +21,24 @@ function stripHtml(html) {
   return (div.textContent || "").trim();
 }
 
+// Många natur-/vetenskapsflöden bäddar in en bild i <enclosure>,
+// <media:content>/<media:thumbnail> eller som en <img> i beskrivningen.
+function extractImage(el) {
+  const enclosure = el.querySelector("enclosure[url]");
+  const enclosureType = enclosure?.getAttribute("type") || "";
+  if (enclosure && (enclosureType === "" || enclosureType.startsWith("image"))) {
+    return enclosure.getAttribute("url");
+  }
+
+  const media =
+    el.getElementsByTagName("media:content")[0] || el.getElementsByTagName("media:thumbnail")[0];
+  if (media?.getAttribute("url")) return media.getAttribute("url");
+
+  const html = el.querySelector("description, summary, content")?.textContent || "";
+  const match = html.match(/<img[^>]+src=["']([^"'\s]+)["']/i);
+  return match ? match[1] : null;
+}
+
 function parseFeedXml(xmlText, feedName) {
   const doc = new DOMParser().parseFromString(xmlText, "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("Kunde inte tolka flödet.");
@@ -32,6 +50,7 @@ function parseFeedXml(xmlText, feedName) {
       title: item.querySelector("title")?.textContent?.trim() || "(Utan titel)",
       link: item.querySelector("link")?.textContent?.trim() || "",
       summary: stripHtml(item.querySelector("description")?.textContent).slice(0, 260),
+      image: extractImage(item),
       source: feedName,
     });
   });
@@ -45,6 +64,7 @@ function parseFeedXml(xmlText, feedName) {
         summary: stripHtml(
           entry.querySelector("summary")?.textContent || entry.querySelector("content")?.textContent
         ).slice(0, 260),
+        image: extractImage(entry),
         source: feedName,
       });
     });

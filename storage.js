@@ -13,10 +13,14 @@ const BOX_INTERVAL_DAYS = [0, 1, 2, 4, 8, 16];
 const MAX_BOX = BOX_INTERVAL_DAYS.length - 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// OBS: fof.se/forskning.se/illvet.se-URL:erna är rimliga gissningar
+// (vanligt WordPress-mönster) som inte gått att bekräfta live – testa
+// dem med "Testa"-knappen i appen och ta bort de som inte fungerar.
 const DEFAULT_FEEDS = [
-  { name: "Smithsonian", url: "https://www.smithsonianmag.com/rss/science-nature/" },
-  { name: "ScienceDaily", url: "https://feeds.sciencedaily.com/sciencedaily/top_news/top_science" },
-  { name: "NASA", url: "https://www.nasa.gov/rss/dyn/breaking_news.rss" },
+  { name: "Forskning & Framsteg", url: "https://fof.se/feed/" },
+  { name: "forskning.se", url: "https://forskning.se/feed/" },
+  { name: "Illustrerad Vetenskap", url: "https://illvet.se/feed/" },
+  { name: "SVT Nyheter", url: "https://www.svt.se/rss.xml" },
 ];
 
 function uid() {
@@ -150,15 +154,18 @@ async function reviewCard(id, remembered) {
 
 // Flöden (feeds) – källor som "Upptäck"-vyn hämtar förslag ifrån.
 
-// Tidigare standardflöden (innan de byttes mot populärvetenskapliga
-// källor). Den som aldrig ändrat sina flöden ska tyst uppgraderas till
-// de nya standardflödena istället för att sitta fast på de gamla för
-// alltid, eftersom de bara sparades i webbläsaren en gång vid första
-// besöket.
-const OLD_DEFAULT_FEED_URLS = ["https://hnrss.org/frontpage", "https://www.svt.se/nyheter/rss.xml", "https://www.nasa.gov/feed/"]
-  .slice()
-  .sort()
-  .join("|");
+// Tidigare standardflöden (innan de byttes ut). Den som aldrig ändrat
+// sina flöden ska tyst uppgraderas till de nya standardflödena istället
+// för att sitta fast på gamla listor för alltid, eftersom de bara
+// sparades i webbläsaren en gång vid första besöket.
+const PAST_DEFAULT_FEED_SETS = [
+  ["https://hnrss.org/frontpage", "https://www.svt.se/nyheter/rss.xml", "https://www.nasa.gov/feed/"],
+  [
+    "https://www.smithsonianmag.com/rss/science-nature/",
+    "https://feeds.sciencedaily.com/sciencedaily/top_news/top_science",
+    "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+  ],
+].map((urls) => urls.slice().sort().join("|"));
 
 async function getFeeds() {
   const feeds = readJSON(FEEDS_KEY, null);
@@ -171,7 +178,7 @@ async function getFeeds() {
     .map((f) => f.url)
     .sort()
     .join("|");
-  if (currentUrls === OLD_DEFAULT_FEED_URLS) {
+  if (PAST_DEFAULT_FEED_SETS.includes(currentUrls)) {
     writeJSON(FEEDS_KEY, DEFAULT_FEEDS);
     return DEFAULT_FEEDS.slice();
   }

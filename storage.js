@@ -150,17 +150,42 @@ async function reviewCard(id, remembered) {
 
 // Flöden (feeds) – källor som "Upptäck"-vyn hämtar förslag ifrån.
 
+// Tidigare standardflöden (innan de byttes mot populärvetenskapliga
+// källor). Den som aldrig ändrat sina flöden ska tyst uppgraderas till
+// de nya standardflödena istället för att sitta fast på de gamla för
+// alltid, eftersom de bara sparades i webbläsaren en gång vid första
+// besöket.
+const OLD_DEFAULT_FEED_URLS = ["https://hnrss.org/frontpage", "https://www.svt.se/nyheter/rss.xml", "https://www.nasa.gov/feed/"]
+  .slice()
+  .sort()
+  .join("|");
+
 async function getFeeds() {
   const feeds = readJSON(FEEDS_KEY, null);
   if (feeds === null) {
     writeJSON(FEEDS_KEY, DEFAULT_FEEDS);
     return DEFAULT_FEEDS.slice();
   }
+
+  const currentUrls = feeds
+    .map((f) => f.url)
+    .sort()
+    .join("|");
+  if (currentUrls === OLD_DEFAULT_FEED_URLS) {
+    writeJSON(FEEDS_KEY, DEFAULT_FEEDS);
+    return DEFAULT_FEEDS.slice();
+  }
+
   return feeds;
 }
 
 async function saveFeeds(feeds) {
   writeJSON(FEEDS_KEY, feeds);
+}
+
+async function resetFeedsToDefault() {
+  writeJSON(FEEDS_KEY, DEFAULT_FEEDS);
+  return DEFAULT_FEEDS.slice();
 }
 
 async function addFeed(url, name) {

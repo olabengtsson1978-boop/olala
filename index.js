@@ -77,6 +77,13 @@ async function renderFeedList() {
   );
 }
 
+document.getElementById("reset-feeds-btn").addEventListener("click", async () => {
+  if (!confirm("Ersätt din flödeslista med standardflödena (NASA, Smithsonian, ScienceDaily)?")) return;
+  await resetFeedsToDefault();
+  await renderFeedList();
+  await loadSuggestions();
+});
+
 document.getElementById("add-feed-btn").addEventListener("click", async () => {
   const urlEl = document.getElementById("new-feed-url");
   const nameEl = document.getElementById("new-feed-name");

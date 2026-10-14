@@ -103,6 +103,38 @@ function sourceColor(name) {
   return `hsl(${hash}, 55%, 42%)`;
 }
 
+// Destillerar en kort "idé"-mening ur sammanfattningen, ungefär som de
+// kondenserade citat-korten i riktiga DeepStash, istället för att visa
+// hela nyhetsingressen rakt av. Det här är bara en enkel heuristik
+// (första meningen/meningarna) – ingen riktig AI-sammanfattning, eftersom
+// appen inte har någon server eller API-nyckel att göra det med.
+function extractIdea(title, summary) {
+  const text = (summary || "").trim();
+  if (!text) return title;
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+  let idea = sentences[0] || text;
+  if (idea.length < 40 && sentences[1]) idea = `${idea} ${sentences[1]}`;
+  if (idea.length > 200) idea = `${idea.slice(0, 197).trim()}…`;
+  return idea;
+}
+
+async function saveSuggestion(items, idx) {
+  const it = items[idx];
+  const idea = extractIdea(it.title, it.summary);
+  await addCard({
+    text: idea,
+    sourceTitle: `${it.title} (${it.source})`,
+    sourceUrl: it.link,
+    tags: [],
+  });
+  await markSeen(it.link);
+  await renderDueCount();
+}
+
+async function skipSuggestion(items, idx) {
+  await markSeen(items[idx].link);
+}
+
 function renderSuggestions(items) {
   const list = document.getElementById("suggestions-list");
   if (items.length === 0) {
@@ -113,6 +145,7 @@ function renderSuggestions(items) {
   list.innerHTML = items
     .map((it, i) => {
       const color = sourceColor(it.source || "");
+      const idea = extractIdea(it.title, it.summary);
       const imageHtml = it.image
         ? `<img class="suggestion-image" src="${escapeHtml(it.image)}" alt="" loading="lazy" onerror="this.remove()">`
         : `<div class="suggestion-image suggestion-image-fallback" style="background:${color};">${escapeHtml(
@@ -123,9 +156,12 @@ function renderSuggestions(items) {
       <div class="card suggestion-card" data-index="${i}">
         ${imageHtml}
         <span class="tag source-badge" style="background:${color};">${escapeHtml(it.source)}</span>
-        <p class="card-text" style="margin-top:8px;">${escapeHtml(it.title)}</p>
-        ${it.summary ? `<p style="font-size:13px;color:#666;margin:0 0 8px;">${escapeHtml(it.summary)}</p>` : ""}
-        <a class="card-source" href="${escapeHtml(it.link)}" target="_blank">Läs artikeln ↗</a>
+        <blockquote class="idea-text">${escapeHtml(idea)}</blockquote>
+        <p class="idea-byline">${escapeHtml(it.title)}</p>
+        <div class="row" style="margin-top:10px;align-items:center;">
+          <button class="speaker-btn" data-speak="${escapeHtml(idea)}" title="Läs upp">🔊</button>
+          <a class="card-source" href="${escapeHtml(it.link)}" target="_blank">Läs artikeln ↗</a>
+        </div>
         <div class="row" style="margin-top:10px;">
           <button class="primary save-suggestion">Spara</button>
           <button class="skip-suggestion">Hoppa över</button>
@@ -134,29 +170,32 @@ function renderSuggestions(items) {
     })
     .join("");
 
-  list.querySelectorAll(".save-suggestion").forEach((btn) =>
-    btn.addEventListener("click", async (e) => {
-      const idx = Number(e.target.closest(".card").dataset.index);
-      const it = items[idx];
-      await addCard({
-        text: it.title,
-        sourceTitle: it.source,
-        sourceUrl: it.link,
-        tags: [],
-      });
-      await markSeen(it.link);
-      e.target.closest(".card").remove();
-      await renderDueCount();
-    })
-  );
+  list.querySelectorAll(".suggestion-card").forEach((cardEl) => {
+    const idx = Number(cardEl.dataset.index);
 
-  list.querySelectorAll(".skip-suggestion").forEach((btn) =>
-    btn.addEventListener("click", async (e) => {
-      const idx = Number(e.target.closest(".card").dataset.index);
-      await markSeen(items[idx].link);
-      e.target.closest(".card").remove();
-    })
-  );
+    cardEl.querySelector(".save-suggestion").addEventListener("click", async () => {
+      await saveSuggestion(items, idx);
+      cardEl.remove();
+    });
+
+    cardEl.querySelector(".skip-suggestion").addEventListener("click", async () => {
+      await skipSuggestion(items, idx);
+      cardEl.remove();
+    });
+
+    enableSwipe(cardEl, {
+      labelRight: "Spara",
+      labelLeft: "Hoppa över",
+      onRight: async () => {
+        await saveSuggestion(items, idx);
+        cardEl.remove();
+      },
+      onLeft: async () => {
+        await skipSuggestion(items, idx);
+        cardEl.remove();
+      },
+    });
+  });
 }
 
 async function loadSuggestions() {

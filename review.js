@@ -23,7 +23,11 @@ function renderCard() {
   const actions = document.getElementById("actions");
 
   if (!showingSource) {
-    content.innerHTML = `<div>${escapeHtml(card.text)}</div>`;
+    content.innerHTML = `
+      <div class="review-card-inner">
+        <div>${escapeHtml(card.text)}</div>
+        <button class="speaker-btn" data-speak="${escapeHtml(card.text)}" title="Läs upp" style="margin-top:14px;">🔊</button>
+      </div>`;
     actions.innerHTML = `<button class="primary" id="show-source">Visa källa</button>`;
     document.getElementById("show-source").addEventListener("click", () => {
       showingSource = true;
@@ -31,7 +35,7 @@ function renderCard() {
     });
   } else {
     content.innerHTML = `
-      <div>
+      <div class="review-card-inner swipeable-review">
         <div>${escapeHtml(card.text)}</div>
         ${
           card.sourceTitle || card.sourceUrl
@@ -40,6 +44,7 @@ function renderCard() {
               )}</div>`
             : ""
         }
+        <button class="speaker-btn" data-speak="${escapeHtml(card.text)}" title="Läs upp" style="margin-top:14px;">🔊</button>
       </div>`;
     actions.innerHTML = `
       <button class="danger" id="forgot">Glömde</button>
@@ -47,6 +52,14 @@ function renderCard() {
 
     document.getElementById("forgot").addEventListener("click", () => advance(false));
     document.getElementById("remembered").addEventListener("click", () => advance(true));
+
+    const swipeTarget = content.querySelector(".swipeable-review");
+    enableSwipe(swipeTarget, {
+      labelRight: "Kom ihåg",
+      labelLeft: "Glömde",
+      onRight: () => advance(true),
+      onLeft: () => advance(false),
+    });
   }
 }
 

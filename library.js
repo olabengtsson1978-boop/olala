@@ -130,7 +130,8 @@ function render() {
         <div class="tags">
           ${c.tags.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("")}
         </div>
-        <div class="row" style="margin-top:10px;">
+        <div class="row" style="margin-top:10px;align-items:center;">
+          <button class="speaker-btn" data-speak="${escapeHtml(c.text)}" title="Läs upp">🔊</button>
           <input type="text" class="edit-tags" placeholder="Redigera taggar, kommaseparerat" value="${escapeHtml(
             c.tags.join(", ")
           )}">

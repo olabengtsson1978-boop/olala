@@ -122,5 +122,13 @@ async function fetchSuggestions() {
     [items[i], items[j]] = [items[j], items[i]];
   }
 
-  return { items: items.slice(0, 30), failures };
+  // Två flöden kan råka publicera samma artikel (länk) – visa den bara en gång.
+  const seenLinks = new Set();
+  const deduped = items.filter((it) => {
+    if (seenLinks.has(it.link)) return false;
+    seenLinks.add(it.link);
+    return true;
+  });
+
+  return { items: deduped.slice(0, 30), failures };
 }

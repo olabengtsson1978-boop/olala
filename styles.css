@@ -214,3 +214,93 @@ button.danger {
   color: #888;
   margin-bottom: 12px;
 }
+
+/* "Idé"-kort, som i riktiga DeepStash: stor citat-typografi istället
+   för en vanlig nyhetsingress. */
+.idea-text {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 19px;
+  line-height: 1.45;
+  margin: 10px 0 6px;
+  padding-left: 20px;
+  position: relative;
+}
+
+.idea-text::before {
+  content: "\201C";
+  position: absolute;
+  left: -4px;
+  top: -8px;
+  font-size: 36px;
+  font-family: Georgia, serif;
+  color: #2b6cb0;
+  opacity: 0.45;
+}
+
+.idea-byline {
+  font-size: 12px;
+  color: #999;
+  margin: 0 0 4px;
+}
+
+.review-card-inner {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+/* Talsyntes-knapp ("speaker") */
+.speaker-btn {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.speaker-btn.speaking {
+  background: #2b6cb0;
+  color: #fff;
+  border-color: #2b6cb0;
+}
+
+/* Svep-gest (dra kortet åt höger/vänster) */
+.swipeable {
+  position: relative;
+  touch-action: pan-y;
+  cursor: grab;
+  user-select: none;
+}
+
+.swipeable:active {
+  cursor: grabbing;
+}
+
+.swipe-hint {
+  position: absolute;
+  top: 14px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.swipe-hint-right {
+  left: 14px;
+  background: #1f8a4c;
+  color: #fff;
+  transform: rotate(-8deg);
+}
+
+.swipe-hint-left {
+  right: 14px;
+  background: #b0342b;
+  color: #fff;
+  transform: rotate(8deg);
+}

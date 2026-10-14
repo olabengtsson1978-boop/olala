@@ -4,13 +4,17 @@
 // Kräver att du satt upp en Worker och sparat dess URL under
 // Upptäck → AI-kuratering. Se README.md för hur du sätter upp den.
 
-async function fetchFromWorker(workerUrl, feedUrls) {
+async function fetchFromWorker(workerUrl, payload) {
   const base = workerUrl.trim().replace(/\/$/, "");
-  const url = `${base}/?feeds=${encodeURIComponent(feedUrls.join(","))}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(base, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       throw new Error((data && data.error) || `HTTP ${res.status}`);
@@ -23,10 +27,11 @@ async function fetchFromWorker(workerUrl, feedUrls) {
   }
 }
 
-// Hämtar förslag från alla sparade flöden via Workern. Returnerar
-// { items, failures, needsSetup } – needsSetup är true om ingen
-// Worker-URL sparats ännu, så UI:t kan visa en vänlig förklaring
-// istället för att försöka hämta mot en tom URL.
+// Hämtar förslag från alla sparade flöden via Workern, personaliserat
+// med dina uttalade intressen plus exempel på vad du brukar spara
+// respektive hoppa över. Returnerar { items, failures, needsSetup } –
+// needsSetup är true om ingen Worker-URL sparats ännu, så UI:t kan visa
+// en vänlig förklaring istället för att försöka hämta mot en tom URL.
 async function fetchSuggestions() {
   const workerUrl = await getWorkerUrl();
   if (!workerUrl) {
@@ -39,15 +44,23 @@ async function fetchSuggestions() {
   }
   const feedNameByUrl = new Map(feeds.map((f) => [f.url, f.name]));
 
-  const [cards, seen] = [await getAllCards(), await getSeenUrls()];
+  const [cards, seen, preferences, liked, disliked] = await Promise.all([
+    getAllCards(),
+    getSeenUrls(),
+    getPreferences(),
+    getLikedExamples(),
+    getDislikedExamples(),
+  ]);
   const knownUrls = new Set([...cards.map((c) => c.sourceUrl).filter(Boolean), ...seen]);
 
   let data;
   try {
-    data = await fetchFromWorker(
-      workerUrl,
-      feeds.map((f) => f.url)
-    );
+    data = await fetchFromWorker(workerUrl, {
+      feeds: feeds.map((f) => f.url),
+      preferences,
+      liked,
+      disliked,
+    });
   } catch (err) {
     return {
       items: [],
@@ -71,9 +84,9 @@ async function fetchSuggestions() {
 }
 
 // Testar ett enskilt flöde via Workern (används av "Testa"-knappen i
-// flödeslistan).
+// flödeslistan). Ingen personalisering behövs för ett rent test.
 async function testFeedViaWorker(workerUrl, feedUrl) {
-  const data = await fetchFromWorker(workerUrl, [feedUrl]);
+  const data = await fetchFromWorker(workerUrl, { feeds: [feedUrl] });
   if ((data.failures || []).length > 0 && (data.items || []).length === 0) {
     throw new Error(data.failures[0].message);
   }

@@ -23,7 +23,7 @@ const FEED_FETCH_TIMEOUT_MS = 10000;
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
 }
@@ -141,11 +141,44 @@ async function fetchAllFeeds(feedUrls) {
 
 // ---- AI-kuratering ----
 
-async function curateWithClaude(items, apiKey) {
+// Bygger ett personaliseringsstycke av uttalade intressen plus exempel
+// på vad användaren brukar spara (gillar) respektive hoppa över
+// (ogillar troligen) – tomt om inget av det finns.
+function buildPersonalizationBlock({ preferences, liked, disliked }) {
+  const parts = [];
+
+  if (preferences && preferences.trim()) {
+    parts.push(`Användarens uttalade intressen: "${preferences.trim()}"`);
+  }
+
+  if (Array.isArray(liked) && liked.length > 0) {
+    const list = liked
+      .slice(0, 15)
+      .map((l) => `- ${l.text}${l.tags && l.tags.length ? ` (taggar: ${l.tags.join(", ")})` : ""}`)
+      .join("\n");
+    parts.push(`Exempel på kort användaren tidigare sparat (visar vad hen brukar gilla):\n${list}`);
+  }
+
+  if (Array.isArray(disliked) && disliked.length > 0) {
+    const list = disliked
+      .slice(0, 15)
+      .map((d) => `- ${d.title}`)
+      .join("\n");
+    parts.push(`Exempel på rubriker användaren hoppat över (troligen mindre intressant för hen):\n${list}`);
+  }
+
+  if (parts.length === 0) return "";
+  return `\n\nPersonalisering – ta hänsyn till detta när du väljer ut artiklar, men välj bara sådant som FAKTISKT är intressant i sig (tvinga inte fram dåliga träffar bara för att matcha profilen):\n${parts.join(
+    "\n\n"
+  )}`;
+}
+
+async function curateWithClaude(items, apiKey, personalization) {
   const candidates = items.slice(0, MAX_ITEMS_TO_MODEL);
   const listing = candidates
     .map((it, i) => `${i + 1}. [${it.source}] ${it.title}\n${it.summary}`)
     .join("\n\n");
+  const personalizationBlock = buildPersonalizationBlock(personalization || {});
 
   const body = {
     model: CLAUDE_MODEL,
@@ -156,7 +189,7 @@ async function curateWithClaude(items, apiKey) {
         content: `Här är artiklar från populärvetenskapliga källor. Välj ut högst ${Math.min(
           candidates.length,
           15
-        )} av de MEST intressanta/förvånande "visste du att"-fakta bland dem – hoppa över tråkiga rena nyhetsnotiser eller sådant utan en konkret wow-fakta. För varje vald artikel: skriv en kort, fängslande svensk mening (max 160 tecken) som destillerar den mest spännande insikten, i stil med ett kunskapskort.\n\nArtiklar:\n${listing}`,
+        )} av de MEST intressanta/förvånande "visste du att"-fakta bland dem – hoppa över tråkiga rena nyhetsnotiser eller sådant utan en konkret wow-fakta. För varje vald artikel: skriv en kort, fängslande svensk mening (max 160 tecken) som destillerar den mest spännande insikten, i stil med ett kunskapskort.\n\nArtiklar:\n${listing}${personalizationBlock}`,
       },
     ],
     tools: [
@@ -220,6 +253,29 @@ function fallbackIdea(item) {
   return sentence.length > 160 ? `${sentence.slice(0, 157).trim()}…` : sentence;
 }
 
+// Läser indata antingen från en POST-body (JSON: feeds/preferences/
+// liked/disliked – det appen faktiskt använder, för personalisering)
+// eller från ?feeds=url1,url2 på en GET (enkel manuell koll direkt i
+// webbläsarens adressfält, utan personalisering).
+async function readInput(request, url) {
+  if (request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    return {
+      feedUrls: Array.isArray(body.feeds) ? body.feeds.map((s) => String(s).trim()).filter(Boolean) : [],
+      preferences: typeof body.preferences === "string" ? body.preferences : "",
+      liked: Array.isArray(body.liked) ? body.liked : [],
+      disliked: Array.isArray(body.disliked) ? body.disliked : [],
+    };
+  }
+  const feedsParam = url.searchParams.get("feeds") || "";
+  return {
+    feedUrls: feedsParam.split(",").map((s) => s.trim()).filter(Boolean),
+    preferences: url.searchParams.get("preferences") || "",
+    liked: [],
+    disliked: [],
+  };
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -227,14 +283,10 @@ export default {
     }
 
     const url = new URL(request.url);
-    const feedsParam = url.searchParams.get("feeds") || "";
-    const feedUrls = feedsParam
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const { feedUrls, preferences, liked, disliked } = await readInput(request, url);
 
     if (feedUrls.length === 0) {
-      return json({ error: "Inga flöden angivna (?feeds=url1,url2,...)" }, 400);
+      return json({ error: "Inga flöden angivna (POST {feeds: [...]} eller ?feeds=url1,url2,...)" }, 400);
     }
 
     const { items, failures } = await fetchAllFeeds(feedUrls);
@@ -251,7 +303,7 @@ export default {
     }
 
     try {
-      const curated = await curateWithClaude(items, env.ANTHROPIC_API_KEY);
+      const curated = await curateWithClaude(items, env.ANTHROPIC_API_KEY, { preferences, liked, disliked });
       return json({ items: curated, failures });
     } catch (err) {
       return json({

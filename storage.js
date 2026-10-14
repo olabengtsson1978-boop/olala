@@ -7,6 +7,7 @@ const STASHES_KEY = "stashStashes";
 const FEEDS_KEY = "stashFeeds";
 const SEEN_KEY = "stashSeenSuggestions";
 const WORKER_URL_KEY = "stashWorkerUrl";
+const PREFERENCES_KEY = "stashPreferences";
 
 // Leitner-lådor: hur många dagar tills ett kort dyker upp igen
 // efter att man svarat "Kom ihåg" i den lådan.
@@ -222,20 +223,64 @@ async function setWorkerUrl(url) {
   writeJSON(WORKER_URL_KEY, (url || "").trim());
 }
 
-// "Sedda" förslag (sparade eller nedtackade) döljs i kommande uppdateringar.
+// Dina uttalade intressen – skickas med som kontext till AI-kurateringen.
 
-async function getSeenUrls() {
-  return readJSON(SEEN_KEY, []);
+async function getPreferences() {
+  return readJSON(PREFERENCES_KEY, "");
 }
 
-async function markSeen(url) {
-  if (!url) return;
-  const seen = await getSeenUrls();
-  if (!seen.includes(url)) {
-    seen.push(url);
-    if (seen.length > 1000) seen.splice(0, seen.length - 1000);
-    writeJSON(SEEN_KEY, seen);
-  }
+async function setPreferences(text) {
+  writeJSON(PREFERENCES_KEY, (text || "").trim());
+}
+
+// "Sedda" förslag (sparade eller nedtackade) döljs i kommande
+// uppdateringar. Utfallet (sparad/nedtackad) sparas också, så Workern
+// kan lära sig vad du brukar gilla respektive hoppa över.
+
+async function getSeenEntries() {
+  const raw = readJSON(SEEN_KEY, []);
+  // Migrerar från det äldre formatet (en ren lista av URL-strängar).
+  return raw.map((entry) =>
+    typeof entry === "string" ? { link: entry, title: "", outcome: "unknown", at: 0 } : entry
+  );
+}
+
+async function getSeenUrls() {
+  const entries = await getSeenEntries();
+  return entries.map((e) => e.link);
+}
+
+async function markSeen(item, outcome) {
+  const link = typeof item === "string" ? item : item?.link;
+  if (!link) return;
+  const entries = await getSeenEntries();
+  if (entries.some((e) => e.link === link)) return;
+  entries.push({
+    link,
+    title: (typeof item === "object" && item && item.title) || "",
+    outcome: outcome || "unknown",
+    at: Date.now(),
+  });
+  if (entries.length > 1000) entries.splice(0, entries.length - 1000);
+  writeJSON(SEEN_KEY, entries);
+}
+
+// Senaste "gillade" (sparade) och "ogillade" (nedtackade) exempel, för
+// att ge Workern en känsla för din smak. Gillade exempel är dina
+// faktiska sparade kort (text + taggar); ogillade är bara titlar på
+// sådant du hoppat över – ingen fullständig artikeltext sparas för dem.
+
+async function getLikedExamples(limit = 15) {
+  const cards = await getAllCards();
+  return cards.slice(0, limit).map((c) => ({ text: c.text, tags: c.tags }));
+}
+
+async function getDislikedExamples(limit = 15) {
+  const entries = await getSeenEntries();
+  return entries
+    .filter((e) => e.outcome === "skipped" && e.title)
+    .slice(-limit)
+    .map((e) => ({ title: e.title }));
 }
 
 async function exportBackup() {
@@ -245,6 +290,7 @@ async function exportBackup() {
     stashes: await getAllStashes(),
     feeds: await getFeeds(),
     workerUrl: await getWorkerUrl(),
+    preferences: await getPreferences(),
   };
 }
 
@@ -256,4 +302,5 @@ async function importBackup(data) {
   await saveAllStashes(Array.isArray(data.stashes) ? data.stashes : []);
   if (Array.isArray(data.feeds)) await saveFeeds(data.feeds);
   if (typeof data.workerUrl === "string") await setWorkerUrl(data.workerUrl);
+  if (typeof data.preferences === "string") await setPreferences(data.preferences);
 }

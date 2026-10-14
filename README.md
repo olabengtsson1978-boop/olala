@@ -16,6 +16,11 @@ Claude för kuratering när du ber om nya förslag.
   DeepStash. Visas som magasinkort med bild, citat-typografi och en
   färgad källbadge. Dra kortet åt höger för att spara, vänster för att
   hoppa över (eller använd knapparna).
+- **Personaliserade förslag**: skriv dina intressen i fritext under
+  "AI-kuratering" – skickas med varje gång. Dessutom lär sig appen
+  automatiskt av dina vanor: vad du sparar räknas som "gillar", vad du
+  hoppar över räknas som "ogillar troligen", och exempel på båda skickas
+  med till Claude som extra kontext.
 - **Talsyntes**: en 🔊-knapp på varje kort (Upptäck, Bibliotek,
   Repetition) läser upp texten högt med webbläsarens inbyggda
   talsyntes. Helt lokalt, ingen server inblandad.
@@ -82,6 +87,14 @@ gång:
 
 Fungerar det inte direkt: använd **"Testa"**-knappen bredvid varje
 flöde i flödeslistan – den visar exakt felmeddelande från Workern.
+
+**Vad som skickas iväg**: varje gång du ber om nya förslag skickar
+appen dina sparade flödes-URL:er, din fritext under "Dina intressen",
+texten+taggarna från dina senaste sparade kort, och rubrikerna på
+artiklar du hoppat över – till din egen Worker och vidare till Claude,
+för att personalisera förslagen. Inget av detta går till någon annan
+server eller delas med oss – bara mellan dig, din Worker och ditt eget
+Anthropic-konto.
 
 ### Flöden
 

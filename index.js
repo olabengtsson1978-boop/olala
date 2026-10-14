@@ -91,8 +91,18 @@ document.getElementById("save-worker-url-btn").addEventListener("click", async (
   await loadSuggestions();
 });
 
+async function renderPreferencesField() {
+  document.getElementById("preferences-text").value = await getPreferences();
+}
+
+document.getElementById("save-preferences-btn").addEventListener("click", async () => {
+  const input = document.getElementById("preferences-text");
+  await setPreferences(input.value);
+  await loadSuggestions();
+});
+
 document.getElementById("reset-feeds-btn").addEventListener("click", async () => {
-  if (!confirm("Ersätt din flödeslista med standardflödena (NASA, Smithsonian, ScienceDaily)?")) return;
+  if (!confirm("Ersätt din flödeslista med standardflödena (Forskning & Framsteg, forskning.se, Illustrerad Vetenskap, SVT Nyheter)?")) return;
   await resetFeedsToDefault();
   await renderFeedList();
   await loadSuggestions();
@@ -126,12 +136,13 @@ async function saveSuggestion(items, idx) {
     sourceUrl: it.link,
     tags: [],
   });
-  await markSeen(it.link);
+  await markSeen({ link: it.link, title: it.title }, "saved");
   await renderDueCount();
 }
 
 async function skipSuggestion(items, idx) {
-  await markSeen(items[idx].link);
+  const it = items[idx];
+  await markSeen({ link: it.link, title: it.title }, "skipped");
 }
 
 function renderSuggestions(items) {
@@ -224,4 +235,5 @@ renderDueCount();
 renderStashOptions();
 renderFeedList();
 renderWorkerUrlField();
+renderPreferencesField();
 loadSuggestions();

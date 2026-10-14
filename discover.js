@@ -1,12 +1,15 @@
 // Hämtar och tolkar RSS/Atom-flöden för "Upptäck"-vyn. De flesta
 // tidningars flöden blockerar CORS för direkta anrop från webbläsaren,
 // så vi provar flera publika läsproxyer i tur och ordning innan vi ger upp.
+// OBS: corsproxy.io är borttagen härifrån – den kräver numera en betald
+// API-nyckel för anrop från en riktig domän (fungerade bara av misstag
+// när vi testade mot localhost, vilket den tillåter gratis).
 
 const PROXY_BUILDERS = [
   (url) => url,
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
   (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+  (url) => `https://proxy.cors.dev/${url}`,
 ];
 
 async function fetchWithTimeout(url, ms) {

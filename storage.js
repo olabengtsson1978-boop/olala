@@ -1,11 +1,12 @@
 // Delad lagringslogik. Allt sparas lokalt i webbläsaren (localStorage)
-// – inget skickas till någon server, förutom att RSS-flöden hämtas
-// direkt (eller via en CORS-proxy) när du ber om nya förslag.
+// – inget skickas till någon server, förutom att RSS-flöden hämtas och
+// AI-kureras via din egen Cloudflare Worker när du ber om nya förslag.
 
 const STORAGE_KEY = "stashCards";
 const STASHES_KEY = "stashStashes";
 const FEEDS_KEY = "stashFeeds";
 const SEEN_KEY = "stashSeenSuggestions";
+const WORKER_URL_KEY = "stashWorkerUrl";
 
 // Leitner-lådor: hur många dagar tills ett kort dyker upp igen
 // efter att man svarat "Kom ihåg" i den lådan.
@@ -209,6 +210,18 @@ async function removeFeed(url) {
   await saveFeeds(feeds.filter((f) => f.url !== url));
 }
 
+// URL till din egen Cloudflare Worker som hämtar och AI-kuraterar
+// förslagen (löser CORS och gör den faktiska destilleringen). Se
+// README.md för hur du sätter upp en.
+
+async function getWorkerUrl() {
+  return readJSON(WORKER_URL_KEY, "");
+}
+
+async function setWorkerUrl(url) {
+  writeJSON(WORKER_URL_KEY, (url || "").trim());
+}
+
 // "Sedda" förslag (sparade eller nedtackade) döljs i kommande uppdateringar.
 
 async function getSeenUrls() {
@@ -231,6 +244,7 @@ async function exportBackup() {
     cards: await getAllCards(),
     stashes: await getAllStashes(),
     feeds: await getFeeds(),
+    workerUrl: await getWorkerUrl(),
   };
 }
 
@@ -241,4 +255,5 @@ async function importBackup(data) {
   await saveAllCards(data.cards);
   await saveAllStashes(Array.isArray(data.stashes) ? data.stashes : []);
   if (Array.isArray(data.feeds)) await saveFeeds(data.feeds);
+  if (typeof data.workerUrl === "string") await setWorkerUrl(data.workerUrl);
 }

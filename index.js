@@ -64,10 +64,14 @@ async function renderFeedList() {
     btn.addEventListener("click", async () => {
       const resultEl = btn.closest(".stash-row").nextElementSibling;
       resultEl.style.display = "block";
+      const workerUrl = await getWorkerUrl();
+      if (!workerUrl) {
+        resultEl.textContent = "Ingen Worker-URL sparad ännu (se AI-kuratering ovan).";
+        return;
+      }
       resultEl.textContent = "Testar…";
       try {
-        const xml = await fetchFeedXml(btn.dataset.testFeed);
-        const items = parseFeedXml(xml, btn.dataset.testName);
+        const items = await testFeedViaWorker(workerUrl, btn.dataset.testFeed);
         const withImages = items.filter((it) => it.image).length;
         resultEl.textContent = `OK – hittade ${items.length} artiklar (${withImages} med bild).`;
       } catch (err) {
@@ -76,6 +80,16 @@ async function renderFeedList() {
     })
   );
 }
+
+async function renderWorkerUrlField() {
+  document.getElementById("worker-url").value = await getWorkerUrl();
+}
+
+document.getElementById("save-worker-url-btn").addEventListener("click", async () => {
+  const input = document.getElementById("worker-url");
+  await setWorkerUrl(input.value);
+  await loadSuggestions();
+});
 
 document.getElementById("reset-feeds-btn").addEventListener("click", async () => {
   if (!confirm("Ersätt din flödeslista med standardflödena (NASA, Smithsonian, ScienceDaily)?")) return;
@@ -103,24 +117,9 @@ function sourceColor(name) {
   return `hsl(${hash}, 55%, 42%)`;
 }
 
-// Destillerar en kort "idé"-mening ur sammanfattningen, ungefär som de
-// kondenserade citat-korten i riktiga DeepStash, istället för att visa
-// hela nyhetsingressen rakt av. Det här är bara en enkel heuristik
-// (första meningen/meningarna) – ingen riktig AI-sammanfattning, eftersom
-// appen inte har någon server eller API-nyckel att göra det med.
-function extractIdea(title, summary) {
-  const text = (summary || "").trim();
-  if (!text) return title;
-  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
-  let idea = sentences[0] || text;
-  if (idea.length < 40 && sentences[1]) idea = `${idea} ${sentences[1]}`;
-  if (idea.length > 200) idea = `${idea.slice(0, 197).trim()}…`;
-  return idea;
-}
-
 async function saveSuggestion(items, idx) {
   const it = items[idx];
-  const idea = extractIdea(it.title, it.summary);
+  const idea = it.idea || it.title;
   await addCard({
     text: idea,
     sourceTitle: `${it.title} (${it.source})`,
@@ -145,7 +144,7 @@ function renderSuggestions(items) {
   list.innerHTML = items
     .map((it, i) => {
       const color = sourceColor(it.source || "");
-      const idea = extractIdea(it.title, it.summary);
+      const idea = it.idea || it.title;
       const imageHtml = it.image
         ? `<img class="suggestion-image" src="${escapeHtml(it.image)}" alt="" loading="lazy" onerror="this.remove()">`
         : `<div class="suggestion-image suggestion-image-fallback" style="background:${color};">${escapeHtml(
@@ -203,10 +202,12 @@ async function loadSuggestions() {
   status.textContent = "Laddar förslag…";
   document.getElementById("suggestions-list").innerHTML = "";
 
-  const { items, failures } = await fetchSuggestions();
+  const { items, failures, needsSetup } = await fetchSuggestions();
   renderSuggestions(items);
 
-  if (failures.length > 0) {
+  if (needsSetup) {
+    status.innerHTML = "Spara en Worker-URL under \"AI-kuratering\" nedan för att hämta förslag.";
+  } else if (failures.length > 0) {
     status.innerHTML = failures
       .map((f) => `Kunde inte hämta <strong>${escapeHtml(f.feed.name)}</strong>: ${escapeHtml(f.message)}`)
       .join("<br>");
@@ -222,4 +223,5 @@ document.getElementById("refresh-btn").addEventListener("click", loadSuggestions
 renderDueCount();
 renderStashOptions();
 renderFeedList();
+renderWorkerUrlField();
 loadSuggestions();

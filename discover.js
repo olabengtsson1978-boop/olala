@@ -1,137 +1,81 @@
-// Hämtar och tolkar RSS/Atom-flöden för "Upptäck"-vyn. De flesta
-// tidningars flöden blockerar CORS för direkta anrop från webbläsaren,
-// så vi provar flera publika läsproxyer i tur och ordning innan vi ger upp.
-// OBS: corsproxy.io är borttagen härifrån – den kräver numera en betald
-// API-nyckel för anrop från en riktig domän (fungerade bara av misstag
-// när vi testade mot localhost, vilket den tillåter gratis).
+// Hämtar och kuraterar förslag via en egen Cloudflare Worker (löser
+// CORS permanent, och låter en AI (Claude) välja ut och destillera de
+// intressantaste "visste du att"-korten ur flödena, server-till-server).
+// Kräver att du satt upp en Worker och sparat dess URL under
+// Upptäck → AI-kuratering. Se README.md för hur du sätter upp den.
 
-const PROXY_BUILDERS = [
-  (url) => url,
-  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-  (url) => `https://proxy.cors.dev/${url}`,
-];
-
-async function fetchWithTimeout(url, ms) {
+async function fetchFromWorker(workerUrl, feedUrls) {
+  const base = workerUrl.trim().replace(/\/$/, "");
+  const url = `${base}/?feeds=${encodeURIComponent(feedUrls.join(","))}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
+  const timer = setTimeout(() => controller.abort(), 30000);
   try {
-    return await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { signal: controller.signal });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error((data && data.error) || `HTTP ${res.status}`);
+    }
+    return data || { items: [], failures: [] };
+  } catch (err) {
+    throw new Error(err.name === "AbortError" ? "timeout (Workern svarade inte i tid)" : err.message);
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchFeedXml(url) {
-  const errors = [];
-  for (const build of PROXY_BUILDERS) {
-    try {
-      const res = await fetchWithTimeout(build(url), 8000);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      if (!text.trim()) throw new Error("Tomt svar");
-      return text;
-    } catch (err) {
-      errors.push(err.name === "AbortError" ? "timeout" : err.message);
-    }
-  }
-  throw new Error(errors.join(" / "));
-}
-
-function stripHtml(html) {
-  const div = document.createElement("div");
-  div.innerHTML = html || "";
-  return (div.textContent || "").trim();
-}
-
-// Många natur-/vetenskapsflöden bäddar in en bild i <enclosure>,
-// <media:content>/<media:thumbnail> eller som en <img> i beskrivningen.
-function extractImage(el) {
-  const enclosure = el.querySelector("enclosure[url]");
-  const enclosureType = enclosure?.getAttribute("type") || "";
-  if (enclosure && (enclosureType === "" || enclosureType.startsWith("image"))) {
-    return enclosure.getAttribute("url");
-  }
-
-  const media =
-    el.getElementsByTagName("media:content")[0] || el.getElementsByTagName("media:thumbnail")[0];
-  if (media?.getAttribute("url")) return media.getAttribute("url");
-
-  const html = el.querySelector("description, summary, content")?.textContent || "";
-  const match = html.match(/<img[^>]+src=["']([^"'\s]+)["']/i);
-  return match ? match[1] : null;
-}
-
-function parseFeedXml(xmlText, feedName) {
-  const doc = new DOMParser().parseFromString(xmlText, "application/xml");
-  if (doc.querySelector("parsererror")) throw new Error("Kunde inte tolka flödet.");
-
-  const items = [];
-
-  doc.querySelectorAll("item").forEach((item) => {
-    items.push({
-      title: item.querySelector("title")?.textContent?.trim() || "(Utan titel)",
-      link: item.querySelector("link")?.textContent?.trim() || "",
-      summary: stripHtml(item.querySelector("description")?.textContent).slice(0, 260),
-      image: extractImage(item),
-      source: feedName,
-    });
-  });
-
-  if (items.length === 0) {
-    doc.querySelectorAll("entry").forEach((entry) => {
-      const linkEl = entry.querySelector("link");
-      items.push({
-        title: entry.querySelector("title")?.textContent?.trim() || "(Utan titel)",
-        link: linkEl?.getAttribute("href") || linkEl?.textContent?.trim() || "",
-        summary: stripHtml(
-          entry.querySelector("summary")?.textContent || entry.querySelector("content")?.textContent
-        ).slice(0, 260),
-        image: extractImage(entry),
-        source: feedName,
-      });
-    });
-  }
-
-  return items.filter((it) => it.link);
-}
-
-// Hämtar förslag från alla sparade flöden. Returnerar { items, failures }
-// där failures listar flöden som inte gick att hämta, så UI:t kan visa
-// en diskret varning utan att krascha hela vyn.
+// Hämtar förslag från alla sparade flöden via Workern. Returnerar
+// { items, failures, needsSetup } – needsSetup är true om ingen
+// Worker-URL sparats ännu, så UI:t kan visa en vänlig förklaring
+// istället för att försöka hämta mot en tom URL.
 async function fetchSuggestions() {
+  const workerUrl = await getWorkerUrl();
+  if (!workerUrl) {
+    return { items: [], failures: [], needsSetup: true };
+  }
+
   const feeds = await getFeeds();
+  if (feeds.length === 0) {
+    return { items: [], failures: [], needsSetup: false };
+  }
+  const feedNameByUrl = new Map(feeds.map((f) => [f.url, f.name]));
+
   const [cards, seen] = [await getAllCards(), await getSeenUrls()];
   const knownUrls = new Set([...cards.map((c) => c.sourceUrl).filter(Boolean), ...seen]);
 
-  const items = [];
-  const failures = [];
-
-  await Promise.all(
-    feeds.map(async (feed) => {
-      try {
-        const xml = await fetchFeedXml(feed.url);
-        const feedItems = parseFeedXml(xml, feed.name);
-        items.push(...feedItems.filter((it) => !knownUrls.has(it.link)));
-      } catch (err) {
-        failures.push({ feed, message: err.message });
-      }
-    })
-  );
-
-  // Blanda flödena om varandra istället för ett flöde i taget.
-  for (let i = items.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [items[i], items[j]] = [items[j], items[i]];
+  let data;
+  try {
+    data = await fetchFromWorker(
+      workerUrl,
+      feeds.map((f) => f.url)
+    );
+  } catch (err) {
+    return {
+      items: [],
+      failures: [{ feed: { name: "Worker" }, message: err.message }],
+      needsSetup: false,
+    };
   }
 
-  // Två flöden kan råka publicera samma artikel (länk) – visa den bara en gång.
-  const seenLinks = new Set();
-  const deduped = items.filter((it) => {
-    if (seenLinks.has(it.link)) return false;
-    seenLinks.add(it.link);
-    return true;
-  });
+  const renamed = (data.items || []).map((it) => ({
+    ...it,
+    source: feedNameByUrl.get(it.source) || it.source,
+  }));
+  const failures = (data.failures || []).map((f) => ({
+    feed: { name: feedNameByUrl.get(f.feed.name) || f.feed.name },
+    message: f.message,
+  }));
 
-  return { items: deduped.slice(0, 30), failures };
+  const items = renamed.filter((it) => it.link && !knownUrls.has(it.link));
+
+  return { items: items.slice(0, 30), failures, needsSetup: false };
+}
+
+// Testar ett enskilt flöde via Workern (används av "Testa"-knappen i
+// flödeslistan).
+async function testFeedViaWorker(workerUrl, feedUrl) {
+  const data = await fetchFromWorker(workerUrl, [feedUrl]);
+  if ((data.failures || []).length > 0 && (data.items || []).length === 0) {
+    throw new Error(data.failures[0].message);
+  }
+  return data.items || [];
 }

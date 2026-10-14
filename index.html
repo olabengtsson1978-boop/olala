@@ -31,7 +31,20 @@
   <div id="suggestions-list"></div>
   <button id="refresh-btn">Uppdatera förslag</button>
 
-  <details style="margin-top:24px;">
+  <details style="margin-top:24px;" open>
+    <summary style="cursor:pointer;color:#888;font-size:13px;">AI-kuratering (Cloudflare Worker)</summary>
+    <p class="muted" style="text-align:left;padding:6px 0;">
+      Förslagen hämtas och väljs ut av en AI via din egen gratis Cloudflare Worker
+      (löser CORS och gör den faktiska destilleringen). Se <code>worker/</code>
+      och README.md i repot för hur du sätter upp den (~5 min, en gång).
+    </p>
+    <div class="row">
+      <input type="text" id="worker-url" placeholder="https://stash-proxy.ditt-namn.workers.dev">
+      <button id="save-worker-url-btn">Spara</button>
+    </div>
+  </details>
+
+  <details style="margin-top:12px;">
     <summary style="cursor:pointer;color:#888;font-size:13px;">Flöden som förslagen hämtas från</summary>
     <div id="feed-list" style="margin-top:10px;"></div>
     <div class="row" style="margin-top:8px;">

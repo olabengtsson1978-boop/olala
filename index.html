@@ -29,14 +29,15 @@
   <h1 style="margin-top:32px;">Förslag</h1>
   <p class="muted" id="suggestions-status" style="padding:0;text-align:left;">Laddar förslag…</p>
   <div id="suggestions-list"></div>
-  <button id="refresh-btn">Uppdatera förslag</button>
+  <button id="refresh-btn">Hämta nya artiklar</button>
 
-  <details style="margin-top:24px;" open>
-    <summary style="cursor:pointer;color:#888;font-size:13px;">AI-kuratering (Cloudflare Worker)</summary>
+  <details style="margin-top:24px;">
+    <summary style="cursor:pointer;color:#888;font-size:13px;">AI-redaktör (Cloudflare Worker)</summary>
     <p class="muted" style="text-align:left;padding:6px 0;">
-      Förslagen hämtas och väljs ut av en AI via din egen gratis Cloudflare Worker
-      (löser CORS och gör den faktiska destilleringen). Se <code>worker/</code>
-      och README.md i repot för hur du sätter upp den (~5 min, en gång).
+      En AI söker fritt på nätet efter förvånande fakta från trovärdiga källor
+      och skriver korta artiklar på svenska, via din egen Cloudflare Worker.
+      Källorna kontrolleras mot sökresultaten. Se <code>worker/</code> och
+      README.md i repot.
     </p>
     <div class="row">
       <input type="text" id="worker-url" placeholder="https://stash-proxy.ditt-namn.workers.dev">
@@ -51,17 +52,6 @@
     </p>
     <textarea id="preferences-text" rows="2" placeholder="T.ex. rymden, djurliv och historia – helst inte politik eller sport"></textarea>
     <button id="save-preferences-btn">Spara intressen</button>
-  </details>
-
-  <details style="margin-top:12px;">
-    <summary style="cursor:pointer;color:#888;font-size:13px;">Flöden som förslagen hämtas från</summary>
-    <div id="feed-list" style="margin-top:10px;"></div>
-    <div class="row" style="margin-top:8px;">
-      <input type="text" id="new-feed-url" placeholder="RSS/Atom-URL, t.ex. https://exempel.se/rss.xml">
-      <input type="text" id="new-feed-name" placeholder="Namn (valfritt)" style="max-width:140px;">
-      <button id="add-feed-btn">Lägg till</button>
-    </div>
-    <button id="reset-feeds-btn" style="margin-top:6px;">Återställ till standardflöden</button>
   </details>
 
   <script src="storage.js"></script>

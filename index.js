@@ -35,52 +35,6 @@ document.getElementById("save-btn").addEventListener("click", async () => {
   await renderDueCount();
 });
 
-async function renderFeedList() {
-  const feeds = await getFeeds();
-  const el = document.getElementById("feed-list");
-  if (feeds.length === 0) {
-    el.innerHTML = '<p class="muted">Inga flöden ännu.</p>';
-    return;
-  }
-  el.innerHTML = feeds
-    .map(
-      (f, i) => `
-      <div class="stash-row" style="margin-bottom:6px;" data-feed-index="${i}">
-        <span>${escapeHtml(f.name)}</span>
-        <span class="card-source" style="flex:1;">${escapeHtml(f.url)}</span>
-        <button class="test-feed" data-test-feed="${escapeHtml(f.url)}" data-test-name="${escapeHtml(f.name)}">Testa</button>
-        <button class="remove-stash" data-remove-feed="${escapeHtml(f.url)}" title="Ta bort flöde">×</button>
-      </div>
-      <p class="muted" style="display:none;padding:0 0 6px;text-align:left;font-size:12px;" data-test-result></p>`
-    )
-    .join("");
-  el.querySelectorAll("[data-remove-feed]").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      await removeFeed(btn.dataset.removeFeed);
-      await renderFeedList();
-    })
-  );
-  el.querySelectorAll("[data-test-feed]").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      const resultEl = btn.closest(".stash-row").nextElementSibling;
-      resultEl.style.display = "block";
-      const workerUrl = await getWorkerUrl();
-      if (!workerUrl) {
-        resultEl.textContent = "Ingen Worker-URL sparad ännu (se AI-kuratering ovan).";
-        return;
-      }
-      resultEl.textContent = "Testar…";
-      try {
-        const items = await testFeedViaWorker(workerUrl, btn.dataset.testFeed);
-        const withImages = items.filter((it) => it.image).length;
-        resultEl.textContent = `OK – hittade ${items.length} artiklar (${withImages} med bild).`;
-      } catch (err) {
-        resultEl.textContent = `Misslyckades: ${err.message}`;
-      }
-    })
-  );
-}
-
 async function renderWorkerUrlField() {
   document.getElementById("worker-url").value = await getWorkerUrl();
 }
@@ -101,24 +55,6 @@ document.getElementById("save-preferences-btn").addEventListener("click", async 
   await loadSuggestions();
 });
 
-document.getElementById("reset-feeds-btn").addEventListener("click", async () => {
-  if (!confirm("Ersätt din flödeslista med standardflödena (Forskning & Framsteg, forskning.se, Illustrerad Vetenskap, SVT Nyheter)?")) return;
-  await resetFeedsToDefault();
-  await renderFeedList();
-  await loadSuggestions();
-});
-
-document.getElementById("add-feed-btn").addEventListener("click", async () => {
-  const urlEl = document.getElementById("new-feed-url");
-  const nameEl = document.getElementById("new-feed-name");
-  const url = urlEl.value.trim();
-  if (!url) return;
-  await addFeed(url, nameEl.value.trim());
-  urlEl.value = "";
-  nameEl.value = "";
-  await renderFeedList();
-});
-
 // Ger varje källa en stabil färg, så samma tidning/flöde alltid får
 // samma badge-färg (rent kosmetiskt, ingen faktisk kategorisering).
 function sourceColor(name) {
@@ -134,15 +70,33 @@ async function saveSuggestion(items, idx) {
     text: idea,
     sourceTitle: `${it.title} (${it.source})`,
     sourceUrl: it.link,
+    body: it.body,
+    sources: it.sources,
     tags: [],
   });
   await markSeen({ link: it.link, title: it.title }, "saved");
+  await removePendingSuggestion(it.link);
   await renderDueCount();
 }
 
 async function skipSuggestion(items, idx) {
   const it = items[idx];
   await markSeen({ link: it.link, title: it.title }, "skipped");
+  await removePendingSuggestion(it.link);
+}
+
+// Utfällbar artikeltext med källförteckning.
+function articleHtml(body, sources) {
+  if (!body) return "";
+  const sourceList = (sources || [])
+    .map((s) => `<li><a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title || s.url)}</a></li>`)
+    .join("");
+  return `
+    <details class="article">
+      <summary>Läs artikeln</summary>
+      <div class="article-body">${escapeHtml(body)}</div>
+      ${sourceList ? `<p class="article-sources-label">Källor</p><ol class="article-sources">${sourceList}</ol>` : ""}
+    </details>`;
 }
 
 function renderSuggestions(items) {
@@ -158,19 +112,18 @@ function renderSuggestions(items) {
       const idea = it.idea || it.title;
       const imageHtml = it.image
         ? `<img class="suggestion-image" src="${escapeHtml(it.image)}" alt="" loading="lazy" onerror="this.remove()">`
-        : `<div class="suggestion-image suggestion-image-fallback" style="background:${color};">${escapeHtml(
-            (it.source || "?").slice(0, 1)
-          )}</div>`;
+        : "";
+      const sourceCount = (it.sources || []).length;
 
       return `
       <div class="card suggestion-card" data-index="${i}">
         ${imageHtml}
         <span class="tag source-badge" style="background:${color};">${escapeHtml(it.source)}</span>
         <blockquote class="idea-text">${escapeHtml(idea)}</blockquote>
-        <p class="idea-byline">${escapeHtml(it.title)}</p>
+        <p class="idea-byline">${escapeHtml(it.title)}${sourceCount > 1 ? ` · ${sourceCount} källor` : ""}</p>
+        ${articleHtml(it.body, it.sources)}
         <div class="row" style="margin-top:10px;align-items:center;">
-          <button class="speaker-btn" data-speak="${escapeHtml(idea)}" title="Läs upp">🔊</button>
-          <a class="card-source" href="${escapeHtml(it.link)}" target="_blank">Läs artikeln ↗</a>
+          <button class="speaker-btn" data-speak="${escapeHtml(it.body ? `${it.title}. ${it.body}` : idea)}" title="Läs upp">🔊</button>
         </div>
         <div class="row" style="margin-top:10px;">
           <button class="primary save-suggestion">Spara</button>
@@ -208,19 +161,35 @@ function renderSuggestions(items) {
   });
 }
 
+// Visar sparade förslag direkt; söker bara efter nya när inga finns kvar
+// eller när du uttryckligen ber om det (varje sökning kostar pengar).
+async function showPendingOrLoad() {
+  const pending = await getPendingSuggestions();
+  if (pending.length > 0) {
+    renderSuggestions(pending);
+    document.getElementById("suggestions-status").textContent = "";
+  } else {
+    await loadSuggestions();
+  }
+}
+
 async function loadSuggestions() {
   const status = document.getElementById("suggestions-status");
-  status.textContent = "Laddar förslag…";
+  const refreshBtn = document.getElementById("refresh-btn");
+  status.textContent = "Söker på nätet och skriver artiklar… (tar oftast 1–3 minuter)";
   document.getElementById("suggestions-list").innerHTML = "";
+  refreshBtn.disabled = true;
 
   const { items, failures, needsSetup } = await fetchSuggestions();
+  refreshBtn.disabled = false;
+  await savePendingSuggestions(items);
   renderSuggestions(items);
 
   if (needsSetup) {
     status.innerHTML = "Spara en Worker-URL under \"AI-kuratering\" nedan för att hämta förslag.";
   } else if (failures.length > 0) {
     status.innerHTML = failures
-      .map((f) => `Kunde inte hämta <strong>${escapeHtml(f.feed.name)}</strong>: ${escapeHtml(f.message)}`)
+      .map((f) => `<strong>${escapeHtml(f.feed.name)}</strong>: ${escapeHtml(f.message)}`)
       .join("<br>");
   } else if (items.length === 0) {
     status.textContent = "Inga nya förslag just nu.";
@@ -233,7 +202,6 @@ document.getElementById("refresh-btn").addEventListener("click", loadSuggestions
 
 renderDueCount();
 renderStashOptions();
-renderFeedList();
 renderWorkerUrlField();
 renderPreferencesField();
-loadSuggestions();
+showPendingOrLoad();

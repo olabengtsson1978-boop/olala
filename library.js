@@ -10,6 +10,20 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Utfällbar artikeltext med källförteckning (för kort sparade från Upptäck).
+function articleHtml(body, sources) {
+  if (!body) return "";
+  const sourceList = (sources || [])
+    .map((s) => `<li><a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title || s.url)}</a></li>`)
+    .join("");
+  return `
+    <details class="article">
+      <summary>Läs artikeln</summary>
+      <div class="article-body">${escapeHtml(body)}</div>
+      ${sourceList ? `<p class="article-sources-label">Källor</p><ol class="article-sources">${sourceList}</ol>` : ""}
+    </details>`;
+}
+
 function allTags(cards) {
   const set = new Set();
   cards.forEach((c) => c.tags.forEach((t) => set.add(t)));
@@ -18,7 +32,7 @@ function allTags(cards) {
 
 function matches(card, query) {
   if (!query) return true;
-  const haystack = `${card.text} ${card.tags.join(" ")}`.toLowerCase();
+  const haystack = `${card.text} ${card.body || ""} ${card.tags.join(" ")}`.toLowerCase();
   return haystack.includes(query.toLowerCase());
 }
 
@@ -127,6 +141,7 @@ function render() {
               )}</a>`
             : ""
         }
+        ${articleHtml(c.body, c.sources)}
         <div class="tags">
           ${c.tags.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join("")}
         </div>

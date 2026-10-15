@@ -1,23 +1,27 @@
 # Stash – en enkel personlig DeepStash-variant
 
 En installerbar webbapp (PWA) för att spara citat/idéer, upptäcka nytt
-via en AI-kuraterad flödeskälla och repetera dina bästa fynd med ett
-enkelt Leitner-system (spaced repetition). Korten lagras lokalt i
+via en AI-redaktör som söker på nätet, och repetera dina bästa fynd med
+ett enkelt Leitner-system (spaced repetition). Korten lagras lokalt i
 webbläsaren (`localStorage`) – inget skickas till någon server, förutom
-att din egen Cloudflare Worker hämtar RSS-flöden och skickar dem till
-Claude för kuratering när du ber om nya förslag.
+att din egen Cloudflare Worker ber Claude söka och skriva nya artiklar
+när du ber om nya förslag.
 
 ## Funktioner
 
 - **Upptäck** (`index.html`): en AI (Claude, via din egen Cloudflare
-  Worker) väljer ut de mest intressanta "visste du att"-fakta ur dina
-  RSS/Atom-flöden och destillerar varje vald artikel till en kort,
-  fängslande mening – ungefär som de kondenserade korten i riktiga
-  DeepStash. Visas som magasinkort med bild, citat-typografi och en
-  färgad källbadge. Dra kortet åt höger för att spara, vänster för att
-  hoppa över (eller använd knapparna).
+  Worker) söker fritt på nätet efter förvånande "visste du att"-fakta
+  från trovärdiga källor (forskningstidskrifter, universitet,
+  myndigheter, etablerade medier) och skriver korta, egna artiklar på
+  svenska om dem – med en fängslande kärnmening, en brödtext och
+  källförteckning. Workern kontrollerar att varje angiven källa faktiskt
+  kom från sökningen; artiklar utan bekräftad källa tas bort. Dra kortet
+  åt höger för att spara, vänster för att hoppa över (eller använd
+  knapparna). Hämtade förslag sparas tills du tagit ställning till dem,
+  så en ny (betald) sökning görs bara när de är slut eller när du trycker
+  "Hämta nya artiklar".
 - **Personaliserade förslag**: skriv dina intressen i fritext under
-  "AI-kuratering" – skickas med varje gång. Dessutom lär sig appen
+  "AI-redaktör" – skickas med varje gång. Dessutom lär sig appen
   automatiskt av dina vanor: vad du sparar räknas som "gillar", vad du
   hoppar över räknas som "ogillar troligen", och exempel på båda skickas
   med till Claude som extra kontext.
@@ -56,14 +60,23 @@ python3 -m http.server 8080
 Webbläsaren visar en installationsikon i adressfältet om du vill lägga
 till appen som en egen app.
 
-## Sätta upp AI-kurateringen (Cloudflare Worker)
+## Sätta upp AI-redaktören (Cloudflare Worker)
 
-Upptäck-sidan kan inte hämta RSS-flöden direkt från webbläsaren (de
-flesta tidningars flöden blockerar det, s.k. CORS), och vi vill ändå ha
-en riktig AI som väljer ut och destillerar de bästa korten istället för
-en enkel gissning. Lösningen är en liten gratis **Cloudflare Worker** –
-en serverfunktion du äger själv – som gör jobbet. Tar ~5 minuter, en
-gång:
+API-nyckeln till Claude får inte ligga i webbappen, så sökandet och
+skrivandet sker i en liten gratis **Cloudflare Worker** – en
+serverfunktion du äger själv. Appen använder som standard
+`https://olala.olabengtsson1978.workers.dev` (se `storage.js`).
+
+Snabbast från terminalen (kräver Node):
+
+```
+cd worker
+npx wrangler login
+npx wrangler deploy
+npx wrangler secret put ANTHROPIC_API_KEY
+```
+
+Eller via Cloudflares dashboard, ~5 minuter, en gång:
 
 1. **Skapa ett gratis Cloudflare-konto**: [dash.cloudflare.com](https://dash.cloudflare.com/sign-up)
    (inget kreditkort krävs för gratisnivån av Workers).
@@ -74,49 +87,43 @@ gång:
    från det här repot. Klicka **Deploy**/**Save and deploy**.
 4. Skaffa en Anthropic API-nyckel: [console.anthropic.com](https://console.anthropic.com/)
    → **API Keys** → **Create Key**. (Kräver att du lägger in betalning
-   på ditt Anthropic-konto – kostnaden per hämtning är mycket liten
-   eftersom Workern använder den billiga Haiku-modellen.)
+   på ditt Anthropic-konto. Varje hämtning med 5 artiklar använder
+   Claude Opus 5.5 plus ett tiotal webbsökningar och kostar grovt
+   uppskattat 5–10 kr – byt `CLAUDE_MODEL` i
+   `worker/worker.js` till `claude-sonnet-5-5` för ungefär halva
+   kostnaden.)
 5. Tillbaka i din Worker: **Settings** → **Variables and Secrets** →
    lägg till en variabel med namnet `ANTHROPIC_API_KEY`, klistra in
    nyckeln som värde, markera den som **Encrypt**/**Secret** → spara.
    Nyckeln når aldrig webbappen eller din webbläsare – bara Workern.
 6. Kopiera Workerns URL (visas högst upp i dashboarden, ser ut som
    `https://stash-proxy.ditt-namn.workers.dev`).
-7. Klistra in den URL:en under **"AI-kuratering"** på Upptäck-sidan i
-   appen → **Spara**.
+7. Använder du en annan Worker än standarden: klistra in URL:en under
+   **"AI-redaktör"** på Upptäck-sidan i appen → **Spara**.
 
-Fungerar det inte direkt: använd **"Testa"**-knappen bredvid varje
-flöde i flödeslistan – den visar exakt felmeddelande från Workern.
+Fungerar det inte: felmeddelandet från Workern visas ovanför förslagen.
 
 **Vad som skickas iväg**: varje gång du ber om nya förslag skickar
-appen dina sparade flödes-URL:er, din fritext under "Dina intressen",
-texten+taggarna från dina senaste sparade kort, och rubrikerna på
-artiklar du hoppat över – till din egen Worker och vidare till Claude,
-för att personalisera förslagen. Inget av detta går till någon annan
-server eller delas med oss – bara mellan dig, din Worker och ditt eget
-Anthropic-konto.
-
-### Flöden
-
-Standardflödena är valda för "spännande fakta"-känsla à la National
-Geographic/Illustrerad Vetenskap: Forskning & Framsteg, forskning.se,
-Illustrerad Vetenskap och SVT Nyheter (fof.se/forskning.se/illvet.se-
-URL:erna följer ett vanligt mönster men är inte oberoende bekräftade –
-testa dem och byt ut de som inte fungerar). Lägg till egna RSS/Atom-URL:er
-under "Flöden som förslagen hämtas från" på Upptäck-sidan.
+appen din fritext under "Dina intressen", texten+taggarna från dina
+senaste sparade kort, och rubrikerna på artiklar du redan sett eller
+hoppat över – till din egen Worker och vidare till Claude, för att
+personalisera förslagen och undvika upprepningar. Claude söker sedan
+på nätet via Anthropics webbsökning. Inget av detta delas med någon
+annan än dig, din Worker och ditt eget Anthropic-konto.
 
 ## Struktur
 
 | Fil | Syfte |
 |---|---|
-| `index.html/js` | Upptäck: AI-kuraterade förslag + manuellt tillägg + flödes-/Worker-inställningar |
-| `discover.js` | Hämtar och kuraterar förslag via Workern |
+| `index.html/js` | Upptäck: AI-skrivna artiklar + manuellt tillägg + Worker-/intresseinställningar |
+| `discover.js` | Hämtar nya artiklar via Workern |
 | `speech.js` | Delad talsyntes-funktion (🔊-knappen) |
 | `swipe.js` | Delad svep-gest (spara/hoppa över, kom ihåg/glömde) |
 | `storage.js` | Delad lagrings- och repetitionslogik (Leitner), stashes, flöden, Worker-URL |
 | `library.html/js` | Bibliotek: sök/filter/redigering, stashes, export/import |
 | `review.html/js` | Repetitionsflödet |
-| `worker/worker.js` | Cloudflare Worker: hämtar flöden + AI-kuraterar via Claude (se ovan) |
+| `worker/worker.js` | Cloudflare Worker: Claude söker på nätet, skriver artiklar, källorna kontrolleras (se ovan) |
+| `worker/wrangler.toml` | Driftsättningsinställningar för Workern (`npx wrangler deploy`) |
 | `manifest.webmanifest` | PWA-metadata (namn, ikoner, installationsbeteende) |
 | `service-worker.js` | Cachar appskalet för offline-bruk |
 | `icons/` | Appens ikoner (16–512px) |

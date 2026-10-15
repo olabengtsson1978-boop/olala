@@ -1,13 +1,15 @@
-// Hämtar och kuraterar förslag via en egen Cloudflare Worker (löser
-// CORS permanent, och låter en AI (Claude) välja ut och destillera de
-// intressantaste "visste du att"-korten ur flödena, server-till-server).
-// Kräver att du satt upp en Worker och sparat dess URL under
-// Upptäck → AI-kuratering. Se README.md för hur du sätter upp den.
+// Hämtar nya artiklar via en egen Cloudflare Worker, där en AI (Claude)
+// söker fritt på webben efter förvånande fakta från trovärdiga källor och
+// skriver korta svenska artiklar med källorna angivna. Workern kontrollerar
+// att källorna faktiskt kom från sökningen. Se README.md och worker/.
+
+const SUGGESTION_COUNT = 5;
 
 async function fetchFromWorker(workerUrl, payload) {
   const base = workerUrl.trim().replace(/\/$/, "");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  // Webbsökning + skrivande tar ofta 1–3 minuter.
+  const timer = setTimeout(() => controller.abort(), 300000);
   try {
     const res = await fetch(base, {
       method: "POST",
@@ -27,39 +29,37 @@ async function fetchFromWorker(workerUrl, payload) {
   }
 }
 
-// Hämtar förslag från alla sparade flöden via Workern, personaliserat
-// med dina uttalade intressen plus exempel på vad du brukar spara
-// respektive hoppa över. Returnerar { items, failures, needsSetup } –
-// needsSetup är true om ingen Worker-URL sparats ännu, så UI:t kan visa
-// en vänlig förklaring istället för att försöka hämta mot en tom URL.
+// Ber Workern om nya artiklar, personaliserade med dina uttalade intressen
+// plus exempel på vad du brukar spara respektive hoppa över. Rubriker du
+// redan sett skickas med så att samma ämne inte kommer tillbaka.
+// Returnerar { items, failures, needsSetup }.
 async function fetchSuggestions() {
   const workerUrl = await getWorkerUrl();
   if (!workerUrl) {
     return { items: [], failures: [], needsSetup: true };
   }
 
-  const feeds = await getFeeds();
-  if (feeds.length === 0) {
-    return { items: [], failures: [], needsSetup: false };
-  }
-  const feedNameByUrl = new Map(feeds.map((f) => [f.url, f.name]));
-
-  const [cards, seen, preferences, liked, disliked] = await Promise.all([
+  const [cards, seenEntries, preferences, liked, disliked] = await Promise.all([
     getAllCards(),
-    getSeenUrls(),
+    getSeenEntries(),
     getPreferences(),
     getLikedExamples(),
     getDislikedExamples(),
   ]);
-  const knownUrls = new Set([...cards.map((c) => c.sourceUrl).filter(Boolean), ...seen]);
+  const knownUrls = new Set([...cards.map((c) => c.sourceUrl).filter(Boolean), ...seenEntries.map((e) => e.link)]);
+  const avoid = seenEntries
+    .map((e) => e.title)
+    .filter(Boolean)
+    .slice(-60);
 
   let data;
   try {
     data = await fetchFromWorker(workerUrl, {
-      feeds: feeds.map((f) => f.url),
+      count: SUGGESTION_COUNT,
       preferences,
       liked,
       disliked,
+      avoid,
     });
   } catch (err) {
     return {
@@ -69,26 +69,6 @@ async function fetchSuggestions() {
     };
   }
 
-  const renamed = (data.items || []).map((it) => ({
-    ...it,
-    source: feedNameByUrl.get(it.source) || it.source,
-  }));
-  const failures = (data.failures || []).map((f) => ({
-    feed: { name: feedNameByUrl.get(f.feed.name) || f.feed.name },
-    message: f.message,
-  }));
-
-  const items = renamed.filter((it) => it.link && !knownUrls.has(it.link));
-
-  return { items: items.slice(0, 30), failures, needsSetup: false };
-}
-
-// Testar ett enskilt flöde via Workern (används av "Testa"-knappen i
-// flödeslistan). Ingen personalisering behövs för ett rent test.
-async function testFeedViaWorker(workerUrl, feedUrl) {
-  const data = await fetchFromWorker(workerUrl, { feeds: [feedUrl] });
-  if ((data.failures || []).length > 0 && (data.items || []).length === 0) {
-    throw new Error(data.failures[0].message);
-  }
-  return data.items || [];
+  const items = (data.items || []).filter((it) => it.link && !knownUrls.has(it.link));
+  return { items, failures: data.failures || [], needsSetup: false };
 }

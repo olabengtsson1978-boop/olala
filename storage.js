@@ -8,6 +8,7 @@ const FEEDS_KEY = "stashFeeds";
 const SEEN_KEY = "stashSeenSuggestions";
 const WORKER_URL_KEY = "stashWorkerUrl";
 const PREFERENCES_KEY = "stashPreferences";
+const PENDING_SUGGESTIONS_KEY = "stashPendingSuggestions";
 
 // Leitner-lådor: hur många dagar tills ett kort dyker upp igen
 // efter att man svarat "Kom ihåg" i den lådan.
@@ -50,7 +51,7 @@ async function saveAllCards(cards) {
   writeJSON(STORAGE_KEY, cards);
 }
 
-async function addCard({ text, sourceTitle, sourceUrl, tags, stashId }) {
+async function addCard({ text, sourceTitle, sourceUrl, tags, stashId, body, sources }) {
   const cards = await getAllCards();
   const now = Date.now();
   const card = {
@@ -58,6 +59,8 @@ async function addCard({ text, sourceTitle, sourceUrl, tags, stashId }) {
     text: text.trim(),
     sourceTitle: sourceTitle || "",
     sourceUrl: sourceUrl || "",
+    body: body || "",
+    sources: Array.isArray(sources) ? sources : [],
     tags: (tags || []).map((t) => t.trim().toLowerCase()).filter(Boolean),
     stashId: stashId || null,
     createdAt: now,
@@ -234,6 +237,22 @@ async function getPreferences() {
 
 async function setPreferences(text) {
   writeJSON(PREFERENCES_KEY, (text || "").trim());
+}
+
+// Förslag som hämtats men inte sparats eller hoppats över än. Sparas så
+// att varje sidladdning inte kostar en ny (betald) webbsökning.
+
+async function getPendingSuggestions() {
+  return readJSON(PENDING_SUGGESTIONS_KEY, []);
+}
+
+async function savePendingSuggestions(items) {
+  writeJSON(PENDING_SUGGESTIONS_KEY, items);
+}
+
+async function removePendingSuggestion(link) {
+  const items = await getPendingSuggestions();
+  await savePendingSuggestions(items.filter((it) => it.link !== link));
 }
 
 // "Sedda" förslag (sparade eller nedtackade) döljs i kommande

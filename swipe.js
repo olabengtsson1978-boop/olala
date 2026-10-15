@@ -61,7 +61,7 @@ function enableSwipe(cardEl, { onRight, onLeft, labelRight = "Spara", labelLeft 
   }
 
   cardEl.addEventListener("pointerdown", (e) => {
-    if (e.target.closest("button, a, select, input, textarea")) return;
+    if (e.target.closest("button, a, select, input, textarea, summary")) return;
     dragging = true;
     startX = e.clientX;
     startY = e.clientY;

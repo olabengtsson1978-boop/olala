@@ -1,29 +1,31 @@
-// Stash – AI-kurerings-Worker
+// Stash – AI-redaktör-Worker
 //
-// Körs som en Cloudflare Worker (gratisnivå). Gör två saker:
-//   1. Hämtar RSS/Atom-flöden server-till-server, vilket helt löser
-//      CORS-problemet webbappen annars har när den försöker hämta
-//      flöden direkt från webbläsaren.
-//   2. Skickar de hämtade artiklarna till Claude, som väljer ut de mest
-//      intressanta/förvånande "visste du att"-fakta och destillerar
-//      varje vald artikel till en kort, fängslande svensk mening –
-//      ungefär som de kondenserade korten i riktiga DeepStash.
+// Körs som en Cloudflare Worker (gratisnivå). Låter Claude söka fritt på
+// webben efter genuint förvånande "visste du att"-fakta från trovärdiga
+// källor, och skriva ihop egna korta artiklar på svenska med källorna
+// angivna – ungefär som de kondenserade korten i riktiga DeepStash.
 //
-// Inget npm-beroende, inget byggsteg – filen är tänkt att klistras in
-// rakt av i Cloudflares dashboard ("Create Worker" → "Quick edit").
+// Varje källa som Claude anger kontrolleras mot de URL:er som faktiskt
+// kom tillbaka från webbsökningen/hämtningen, så påhittade länkar
+// sorteras bort. Artiklar utan någon bekräftad källa tas inte med.
 //
-// Krävs: en miljövariabel/secret ANTHROPIC_API_KEY (Settings → Variables
-// i Worker-dashboarden, markerad som "Encrypt"). Den nås ALDRIG av
-// webbappen – bara av den här servern.
+// Inget npm-beroende, inget byggsteg. Driftsätts med `npx wrangler deploy`
+// från den här mappen (se wrangler.toml), eller klistras in rakt av i
+// Cloudflares dashboard ("Create Worker" → "Quick edit").
+//
+// Krävs: en secret ANTHROPIC_API_KEY (`npx wrangler secret put
+// ANTHROPIC_API_KEY`). Den nås ALDRIG av webbappen – bara av den här
+// servern.
 
-const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
-const MAX_ITEMS_TO_MODEL = 25;
-const FEED_FETCH_TIMEOUT_MS = 10000;
+const CLAUDE_MODEL = "claude-opus-5-5";
+const DEFAULT_ARTICLE_COUNT = 5;
+const MAX_ARTICLE_COUNT = 8;
+const MAX_CONTINUATIONS = 4;
 
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
 }
@@ -35,111 +37,23 @@ function json(data, status = 200) {
   });
 }
 
-// ---- Minimal RSS/Atom-parsning utan DOM (Workers har ingen DOMParser) ----
+// ---- Prompt ----
 
-function stripCdata(s) {
-  const m = s.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
-  return m ? m[1] : s;
-}
+const SYSTEM_PROMPT = `Du är redaktör för en svensk kunskapsapp i stil med DeepStash. Din uppgift är att använda webbsökning för att hitta genuint förvånande, konkreta "visste du att"-insikter – nya forskningsrön eller tidlösa fakta – och skriva korta, egna artiklar om dem på svenska.
 
-function decodeEntitiesAndStripTags(s) {
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+Källkrav:
+- Använd bara trovärdiga, verifierbara källor: vetenskapliga tidskrifter, universitet och forskningsinstitut, myndigheter och internationella organisationer, samt etablerade nyhets- och vetenskapsmedier (t.ex. Nature, Science, NASA, SVT, BBC, Forskning & Framsteg, Smithsonian).
+- Undvik bloggar, innehållsfarmar, forum, sociala medier, pressmeddelanden utan underlag och sajter som verkar AI-genererade.
+- Varje artikel ska helst bygga på minst två oberoende källor. Hämta och läs en källa om sökresultatet inte räcker för att belägga påståendet.
+- Ange bara URL:er som faktiskt förekommit i dina sök- eller hämtningsresultat.
+- Kan något inte beläggas ordentligt, ta inte med det.
 
-function extractTag(block, tag) {
-  const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
-  if (!m) return "";
-  return decodeEntitiesAndStripTags(stripCdata(m[1]));
-}
+Skrivkrav:
+- Variera ämnena (natur, rymd, människokroppen, historia, teknik, språk, psykologi …) inom ramen för användarens intressen.
+- Skriv med egna ord. Citera aldrig mer än en kort mening ordagrant.
+- Varje artikel har: en rubrik, en "idé" (en fängslande mening på max 160 tecken som bär den mest spännande insikten), en brödtext på 120–220 ord som förklarar vad, hur och varför det är intressant, samt källorna.
 
-function extractImage(block) {
-  const enclosure = block.match(/<enclosure[^>]+url=["']([^"']+)["'][^>]*>/i);
-  if (enclosure) return enclosure[1];
-  const media = block.match(/<media:(?:content|thumbnail)[^>]+url=["']([^"']+)["']/i);
-  if (media) return media[1];
-  const descBlock = (block.match(/<description[^>]*>([\s\S]*?)<\/description>/i) || [, ""])[1];
-  const img = stripCdata(descBlock).match(/<img[^>]+src=["']([^"'\s]+)["']/i);
-  return img ? img[1] : null;
-}
-
-function extractLink(block) {
-  const plain = block.match(/<link[^>]*>([^<]+)<\/link>/i);
-  if (plain && plain[1].trim()) return plain[1].trim();
-  const atomHref = block.match(/<link[^>]+href=["']([^"']+)["']/i);
-  return atomHref ? atomHref[1] : "";
-}
-
-function parseFeed(xml, sourceName) {
-  const itemRe = /<item\b[\s\S]*?<\/item>/gi;
-  let blocks = xml.match(itemRe) || [];
-  if (blocks.length === 0) {
-    blocks = xml.match(/<entry\b[\s\S]*?<\/entry>/gi) || [];
-  }
-
-  return blocks
-    .map((block) => {
-      const title = extractTag(block, "title") || "(Utan titel)";
-      const link = extractLink(block);
-      const summaryRaw =
-        (block.match(/<description[^>]*>([\s\S]*?)<\/description>/i) ||
-          block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i) ||
-          block.match(/<content[^>]*>([\s\S]*?)<\/content>/i) || [, ""])[1];
-      const summary = decodeEntitiesAndStripTags(stripCdata(summaryRaw || "")).slice(0, 500);
-      const image = extractImage(block);
-      return { title, link, summary, image, source: sourceName };
-    })
-    .filter((it) => it.link);
-}
-
-async function fetchWithTimeout(url, ms) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, {
-      signal: controller.signal,
-      headers: { "user-agent": "Mozilla/5.0 (compatible; StashBot/1.0)" },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function fetchAllFeeds(feedUrls) {
-  const items = [];
-  const failures = [];
-
-  await Promise.all(
-    feedUrls.map(async (feedUrl) => {
-      try {
-        const res = await fetchWithTimeout(feedUrl, FEED_FETCH_TIMEOUT_MS);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const xml = await res.text();
-        items.push(...parseFeed(xml, feedUrl));
-      } catch (err) {
-        failures.push({ feed: { name: feedUrl }, message: err.message || String(err) });
-      }
-    })
-  );
-
-  const seenLinks = new Set();
-  const deduped = items.filter((it) => {
-    if (seenLinks.has(it.link)) return false;
-    seenLinks.add(it.link);
-    return true;
-  });
-
-  return { items: deduped, failures };
-}
-
-// ---- AI-kuratering ----
+Avsluta genom att anropa verktyget return_articles exakt en gång med alla artiklar.`;
 
 // Bygger ett personaliseringsstycke av uttalade intressen plus exempel
 // på vad användaren brukar spara (gillar) respektive hoppa över
@@ -168,111 +82,187 @@ function buildPersonalizationBlock({ preferences, liked, disliked }) {
   }
 
   if (parts.length === 0) return "";
-  return `\n\nPersonalisering – ta hänsyn till detta när du väljer ut artiklar, men välj bara sådant som FAKTISKT är intressant i sig (tvinga inte fram dåliga träffar bara för att matcha profilen):\n${parts.join(
+  return `\n\nPersonalisering – ta hänsyn till detta, men välj bara sådant som FAKTISKT är intressant i sig:\n${parts.join(
     "\n\n"
   )}`;
 }
 
-async function curateWithClaude(items, apiKey, personalization) {
-  const candidates = items.slice(0, MAX_ITEMS_TO_MODEL);
-  const listing = candidates
-    .map((it, i) => `${i + 1}. [${it.source}] ${it.title}\n${it.summary}`)
-    .join("\n\n");
-  const personalizationBlock = buildPersonalizationBlock(personalization || {});
+function buildUserMessage({ count, preferences, liked, disliked, avoid }) {
+  const avoidBlock =
+    Array.isArray(avoid) && avoid.length > 0
+      ? `\n\nSkriv INTE om samma sak som dessa rubriker användaren redan sett:\n${avoid
+          .slice(0, 60)
+          .map((t) => `- ${t}`)
+          .join("\n")}`
+      : "";
+  return `Hitta och skriv ${count} artiklar.${buildPersonalizationBlock({ preferences, liked, disliked })}${avoidBlock}`;
+}
 
-  const body = {
-    model: CLAUDE_MODEL,
-    max_tokens: 2000,
-    messages: [
-      {
-        role: "user",
-        content: `Här är artiklar från populärvetenskapliga källor. Välj ut högst ${Math.min(
-          candidates.length,
-          15
-        )} av de MEST intressanta/förvånande "visste du att"-fakta bland dem – hoppa över tråkiga rena nyhetsnotiser eller sådant utan en konkret wow-fakta. För varje vald artikel: skriv en kort, fängslande svensk mening (max 160 tecken) som destillerar den mest spännande insikten, i stil med ett kunskapskort.\n\nArtiklar:\n${listing}${personalizationBlock}`,
-      },
-    ],
-    tools: [
-      {
-        name: "return_ideas",
-        description: "Returnerar de utvalda och destillerade idé-korten.",
-        input_schema: {
+const RETURN_ARTICLES_TOOL = {
+  name: "return_articles",
+  description: "Returnerar de färdiga artiklarna med källor. Anropas en gång, sist.",
+  strict: true,
+  input_schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["articles"],
+    properties: {
+      articles: {
+        type: "array",
+        items: {
           type: "object",
+          additionalProperties: false,
+          required: ["title", "idea", "body", "sources"],
           properties: {
-            ideas: {
+            title: { type: "string", description: "Kort svensk rubrik" },
+            idea: { type: "string", description: "En fängslande svensk mening, max 160 tecken" },
+            body: { type: "string", description: "Svensk brödtext, 120–220 ord" },
+            sources: {
               type: "array",
+              description: "Källorna artikeln bygger på, viktigast först",
               items: {
                 type: "object",
+                additionalProperties: false,
+                required: ["title", "url"],
                 properties: {
-                  index: { type: "integer", description: "1-baserat index i artikellistan ovan" },
-                  idea: { type: "string", description: "Kort, fängslande svensk mening (max 160 tecken)" },
+                  title: { type: "string", description: "Källans namn eller sidans rubrik" },
+                  url: { type: "string", description: "Exakt URL från sök-/hämtningsresultaten" },
                 },
-                required: ["index", "idea"],
               },
             },
           },
-          required: ["ideas"],
         },
       },
-    ],
-    tool_choice: { type: "tool", name: "return_ideas" },
-  };
+    },
+  },
+};
 
+// ---- Claude-anrop ----
+
+async function callClaude(apiKey, messages) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "server-side-fallback-2026-07-01",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 16000,
+      output_config: { effort: "medium" },
+      fallbacks: "default",
+      system: SYSTEM_PROMPT,
+      tools: [
+        { type: "web_search_20260209", name: "web_search", max_uses: 12 },
+        { type: "web_fetch_20260209", name: "web_fetch", max_uses: 6 },
+        RETURN_ARTICLES_TOOL,
+      ],
+      tool_choice: { type: "auto" },
+      messages,
+    }),
   });
 
   if (!res.ok) {
-    throw new Error(`Claude API HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    throw new Error(`Claude API HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+// Samlar alla URL:er som förekommer i resultaten från webbsökning och
+// webbhämtning, så att Claudes angivna källor kan kontrolleras mot dem.
+function collectSeenUrls(content, into) {
+  const visit = (node) => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!node || typeof node !== "object") return;
+    if (typeof node.url === "string") into.add(normalizeUrl(node.url));
+    Object.values(node).forEach(visit);
+  };
+  content.filter((b) => typeof b.type === "string" && b.type.endsWith("_tool_result")).forEach(visit);
+}
+
+function normalizeUrl(raw) {
+  try {
+    const u = new URL(raw);
+    u.hash = "";
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    const path = u.pathname.replace(/\/+$/, "");
+    return `${host}${path}${u.search}`;
+  } catch {
+    return String(raw).trim();
+  }
+}
+
+function hostLabel(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+async function writeArticles(apiKey, input) {
+  const messages = [{ role: "user", content: buildUserMessage(input) }];
+  const seenUrls = new Set();
+  let searches = 0;
+  let nudged = false;
+
+  for (let turn = 0; turn <= MAX_CONTINUATIONS + 1; turn++) {
+    const data = await callClaude(apiKey, messages);
+    if (data.stop_reason === "refusal") {
+      throw new Error("Claude avböjde förfrågan.");
+    }
+
+    const content = data.content || [];
+    collectSeenUrls(content, seenUrls);
+    searches += data.usage?.server_tool_use?.web_search_requests || 0;
+
+    const call = content.find((b) => b.type === "tool_use" && b.name === "return_articles");
+    if (call) {
+      return { articles: call.input.articles || [], seenUrls, searches };
+    }
+
+    messages.push({ role: "assistant", content });
+    if (data.stop_reason === "pause_turn") continue;
+
+    // Claude slutade utan att lämna artiklarna – be en gång om dem.
+    if (nudged) break;
+    nudged = true;
+    messages.push({ role: "user", content: "Anropa return_articles nu med de artiklar du hittat belägg för." });
   }
 
-  const data = await res.json();
-  const toolUse = (data.content || []).find((c) => c.type === "tool_use");
-  if (!toolUse) throw new Error("Inget strukturerat svar från Claude.");
+  throw new Error("Claude lämnade inga artiklar.");
+}
 
-  return toolUse.input.ideas
-    .map((sel) => {
-      const item = candidates[sel.index - 1];
-      return item ? { ...item, idea: sel.idea } : null;
+// Behåller bara källor som faktiskt dök upp i sök-/hämtningsresultaten
+// och artiklar som har minst en sådan källa.
+function verifyArticles(articles, seenUrls) {
+  return articles
+    .map((a) => {
+      const sources = (a.sources || []).filter((s) => s.url && seenUrls.has(normalizeUrl(s.url)));
+      return { ...a, sources };
     })
-    .filter(Boolean);
+    .filter((a) => a.sources.length > 0 && a.idea && a.body)
+    .map((a) => ({
+      title: a.title,
+      idea: a.idea,
+      body: a.body,
+      sources: a.sources,
+      link: a.sources[0].url,
+      source: hostLabel(a.sources[0].url),
+    }));
 }
 
-// Enkel reservlösning om Claude-anropet misslyckas (saknad/ogiltig
-// nyckel, rate limit, m.m.) – hellre okurerat innehåll än inget alls.
-function fallbackIdea(item) {
-  const text = (item.summary || "").trim();
-  if (!text) return item.title;
-  const sentence = text.split(/(?<=[.!?])\s+/)[0] || text;
-  return sentence.length > 160 ? `${sentence.slice(0, 157).trim()}…` : sentence;
-}
-
-// Läser indata antingen från en POST-body (JSON: feeds/preferences/
-// liked/disliked – det appen faktiskt använder, för personalisering)
-// eller från ?feeds=url1,url2 på en GET (enkel manuell koll direkt i
-// webbläsarens adressfält, utan personalisering).
-async function readInput(request, url) {
-  if (request.method === "POST") {
-    const body = await request.json().catch(() => ({}));
-    return {
-      feedUrls: Array.isArray(body.feeds) ? body.feeds.map((s) => String(s).trim()).filter(Boolean) : [],
-      preferences: typeof body.preferences === "string" ? body.preferences : "",
-      liked: Array.isArray(body.liked) ? body.liked : [],
-      disliked: Array.isArray(body.disliked) ? body.disliked : [],
-    };
-  }
-  const feedsParam = url.searchParams.get("feeds") || "";
+async function readInput(request) {
+  const body = await request.json().catch(() => ({}));
+  const count = Math.min(Math.max(Number(body.count) || DEFAULT_ARTICLE_COUNT, 1), MAX_ARTICLE_COUNT);
   return {
-    feedUrls: feedsParam.split(",").map((s) => s.trim()).filter(Boolean),
-    preferences: url.searchParams.get("preferences") || "",
-    liked: [],
-    disliked: [],
+    count,
+    preferences: typeof body.preferences === "string" ? body.preferences : "",
+    liked: Array.isArray(body.liked) ? body.liked : [],
+    disliked: Array.isArray(body.disliked) ? body.disliked : [],
+    avoid: Array.isArray(body.avoid) ? body.avoid.map(String) : [],
   };
 }
 
@@ -281,35 +271,26 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
     }
-
-    const url = new URL(request.url);
-    const { feedUrls, preferences, liked, disliked } = await readInput(request, url);
-
-    if (feedUrls.length === 0) {
-      return json({ error: "Inga flöden angivna (POST {feeds: [...]} eller ?feeds=url1,url2,...)" }, 400);
+    if (request.method !== "POST") {
+      return json({ error: "Använd POST {preferences, liked, disliked, avoid, count}." }, 405);
     }
-
-    const { items, failures } = await fetchAllFeeds(feedUrls);
-
-    if (items.length === 0) {
-      return json({ items: [], failures });
-    }
-
     if (!env.ANTHROPIC_API_KEY) {
-      return json({
-        items: items.map((it) => ({ ...it, idea: fallbackIdea(it) })),
-        failures: [...failures, { feed: { name: "AI-kuratering" }, message: "ANTHROPIC_API_KEY saknas i Workerns inställningar – visar okurerat innehåll." }],
-      });
+      return json({ error: "ANTHROPIC_API_KEY saknas i Workerns inställningar." }, 500);
     }
+
+    const input = await readInput(request);
 
     try {
-      const curated = await curateWithClaude(items, env.ANTHROPIC_API_KEY, { preferences, liked, disliked });
-      return json({ items: curated, failures });
+      const { articles, seenUrls, searches } = await writeArticles(env.ANTHROPIC_API_KEY, input);
+      const items = verifyArticles(articles, seenUrls);
+      const dropped = articles.length - items.length;
+      const failures =
+        dropped > 0
+          ? [{ feed: { name: "Källkontroll" }, message: `${dropped} artikel(ar) togs bort eftersom källorna inte kunde bekräftas.` }]
+          : [];
+      return json({ items, failures, searches });
     } catch (err) {
-      return json({
-        items: items.map((it) => ({ ...it, idea: fallbackIdea(it) })),
-        failures: [...failures, { feed: { name: "AI-kuratering" }, message: err.message || String(err) }],
-      });
+      return json({ error: err.message || String(err) }, 502);
     }
   },
 };

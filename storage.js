@@ -213,10 +213,13 @@ async function removeFeed(url) {
 
 // URL till din egen Cloudflare Worker som hämtar och AI-kuraterar
 // förslagen (löser CORS och gör den faktiska destilleringen). Se
-// README.md för hur du sätter upp en.
+// README.md för hur du sätter upp en. Används DEFAULT_WORKER_URL om
+// ingen egen URL sparats.
+
+const DEFAULT_WORKER_URL = "https://olala.olabengtsson1978.workers.dev";
 
 async function getWorkerUrl() {
-  return readJSON(WORKER_URL_KEY, "");
+  return readJSON(WORKER_URL_KEY, "") || DEFAULT_WORKER_URL;
 }
 
 async function setWorkerUrl(url) {

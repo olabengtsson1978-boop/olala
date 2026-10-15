@@ -18,7 +18,7 @@ async function fetchFromWorker(workerUrl, payload) {
       signal: controller.signal,
     });
     const data = await res.json().catch(() => null);
-    if (!res.ok) {
+    if (!res.ok || (data && data.error)) {
       throw new Error((data && data.error) || `HTTP ${res.status}`);
     }
     return data || { items: [], failures: [] };

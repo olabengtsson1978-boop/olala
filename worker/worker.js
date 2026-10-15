@@ -161,13 +161,84 @@ async function callClaude(apiKey, messages) {
       ],
       tool_choice: { type: "auto" },
       messages,
+      // Strömmat, annars bryts långa svar med 524 efter ~100 s.
+      stream: true,
     }),
   });
 
   if (!res.ok) {
     throw new Error(`Claude API HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
   }
-  return res.json();
+  return readMessageStream(res.body);
+}
+
+// Bygger ihop ett färdigt meddelande (samma form som ett icke-strömmat
+// svar) av Messages API:ets server-sent events.
+async function readMessageStream(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let message = null;
+  const blocks = [];
+
+  const handle = (event) => {
+    switch (event.type) {
+      case "message_start":
+        message = event.message;
+        break;
+      case "content_block_start": {
+        const block = { ...event.content_block };
+        if ("input" in block) block._json = "";
+        blocks[event.index] = block;
+        break;
+      }
+      case "content_block_delta": {
+        const block = blocks[event.index];
+        const d = event.delta;
+        if (d.type === "text_delta") block.text = (block.text || "") + d.text;
+        else if (d.type === "input_json_delta") block._json += d.partial_json;
+        else if (d.type === "thinking_delta") block.thinking = (block.thinking || "") + d.thinking;
+        else if (d.type === "signature_delta") block.signature = d.signature;
+        else if (d.type === "citations_delta") block.citations = [...(block.citations || []), d.citation];
+        break;
+      }
+      case "content_block_stop": {
+        const block = blocks[event.index];
+        if (block && block._json !== undefined) {
+          block.input = block._json ? JSON.parse(block._json) : block.input || {};
+          delete block._json;
+        }
+        break;
+      }
+      case "message_delta":
+        Object.assign(message, event.delta);
+        message.usage = { ...message.usage, ...event.usage };
+        break;
+      case "error":
+        throw new Error(`Claude API: ${event.error?.message || "okänt fel i strömmen"}`);
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const data = raw
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("");
+      if (data) handle(JSON.parse(data));
+    }
+  }
+
+  if (!message) throw new Error("Tomt svar från Claude API.");
+  message.content = blocks.filter(Boolean);
+  return message;
 }
 
 // Samlar alla URL:er som förekommer i resultaten från webbsökning och
@@ -267,7 +338,7 @@ async function readInput(request) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
     }
@@ -280,17 +351,37 @@ export default {
 
     const input = await readInput(request);
 
-    try {
-      const { articles, seenUrls, searches } = await writeArticles(env.ANTHROPIC_API_KEY, input);
-      const items = verifyArticles(articles, seenUrls);
-      const dropped = articles.length - items.length;
-      const failures =
-        dropped > 0
-          ? [{ feed: { name: "Källkontroll" }, message: `${dropped} artikel(ar) togs bort eftersom källorna inte kunde bekräftas.` }]
-          : [];
-      return json({ items, failures, searches });
-    } catch (err) {
-      return json({ error: err.message || String(err) }, 502);
-    }
+    // Sökandet tar ofta mer än 100 s, då Cloudflare annars avbryter med
+    // 524. Svaret börjar därför direkt och hålls vid liv med blanksteg
+    // (giltigt före JSON) tills artiklarna är klara. Fel skickas som
+    // { error } i samma ström, eftersom statuskoden redan är 200.
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
+    const heartbeat = setInterval(() => writer.write(encoder.encode(" ")).catch(() => {}), 10000);
+
+    const work = (async () => {
+      let result;
+      try {
+        const { articles, seenUrls, searches } = await writeArticles(env.ANTHROPIC_API_KEY, input);
+        const items = verifyArticles(articles, seenUrls);
+        const dropped = articles.length - items.length;
+        const failures =
+          dropped > 0
+            ? [{ feed: { name: "Källkontroll" }, message: `${dropped} artikel(ar) togs bort eftersom källorna inte kunde bekräftas.` }]
+            : [];
+        result = { items, failures, searches };
+      } catch (err) {
+        result = { error: err.message || String(err) };
+      }
+      clearInterval(heartbeat);
+      await writer.write(encoder.encode(JSON.stringify(result)));
+      await writer.close();
+    })();
+    ctx.waitUntil(work);
+
+    return new Response(readable, {
+      headers: { "content-type": "application/json; charset=utf-8", ...corsHeaders() },
+    });
   },
 };

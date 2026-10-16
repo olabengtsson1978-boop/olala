@@ -71,7 +71,7 @@ async function fetchSuggestions() {
   }
 
   const items = (data.items || []).filter((it) => it.link && !knownUrls.has(it.link));
-  return { items, failures: data.failures || [], needsSetup: false };
+  return { items, failures: data.failures || [], needsSetup: false, provider: data.provider };
 }
 
 // Ber Workern om nya artiklar åt Barn-sidan. Samma Worker-URL, men en
@@ -109,5 +109,5 @@ async function fetchKidSuggestions() {
   }
 
   const items = (data.items || []).filter((it) => it.link && !knownUrls.has(it.link));
-  return { items, failures: data.failures || [], needsSetup: false };
+  return { items, failures: data.failures || [], needsSetup: false, provider: data.provider };
 }

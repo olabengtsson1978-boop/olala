@@ -180,7 +180,7 @@ async function loadSuggestions() {
   document.getElementById("suggestions-list").innerHTML = "";
   refreshBtn.disabled = true;
 
-  const { items, failures, needsSetup } = await fetchSuggestions();
+  const { items, failures, needsSetup, provider } = await fetchSuggestions();
   refreshBtn.disabled = false;
   await savePendingSuggestions(items);
   renderSuggestions(items);
@@ -193,6 +193,10 @@ async function loadSuggestions() {
       .join("<br>");
   } else if (items.length === 0) {
     status.textContent = "Inga nya förslag just nu.";
+  } else if (provider && provider !== "claude") {
+    status.innerHTML = `<span style="color:#888;">ℹ️ Hämtat via gratisläget ${
+      provider === "groq" ? "Groq" : "Mistral"
+    } eftersom Claude inte kunde nås just nu.</span>`;
   } else {
     status.textContent = "";
   }

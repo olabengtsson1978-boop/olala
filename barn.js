@@ -161,7 +161,7 @@ async function loadSuggestions() {
   document.getElementById("suggestions-list").innerHTML = "";
   refreshBtn.disabled = true;
 
-  const { items, failures, needsSetup } = await fetchKidSuggestions();
+  const { items, failures, needsSetup, provider } = await fetchKidSuggestions();
   refreshBtn.disabled = false;
   await savePendingSuggestions(items);
   renderSuggestions(items);
@@ -172,6 +172,8 @@ async function loadSuggestions() {
     status.innerHTML = failures.map((f) => escapeHtml(f.message)).join("<br>");
   } else if (items.length === 0) {
     status.textContent = "Inga nya fakta just nu – prova igen om ett tag! 🙂";
+  } else if (provider && provider !== "claude") {
+    status.innerHTML = `<span style="color:#888;">ℹ️ Hämtat via reservläget just nu, men lika noga granskat! 🙂</span>`;
   } else {
     status.textContent = "";
   }

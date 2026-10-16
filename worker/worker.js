@@ -1,27 +1,49 @@
 // Stash – AI-redaktör-Worker
 //
-// Körs som en Cloudflare Worker (gratisnivå). Låter Claude söka fritt på
-// webben efter genuint förvånande "visste du att"-fakta från trovärdiga
-// källor, och skriva ihop egna korta artiklar på svenska med källorna
-// angivna – ungefär som de kondenserade korten i riktiga DeepStash.
+// Körs som en Cloudflare Worker (gratisnivå). Låter en AI söka/hämta
+// fram genuint förvånande "visste du att"-fakta från trovärdiga källor,
+// och skriva ihop egna korta artiklar på svenska med källorna angivna –
+// ungefär som de kondenserade korten i riktiga DeepStash.
 //
-// Varje källa som Claude anger kontrolleras mot de URL:er som faktiskt
-// kom tillbaka från webbsökningen/hämtningen, så påhittade länkar
-// sorteras bort. Artiklar utan någon bekräftad källa tas inte med.
+// TRE leverantörer, provade i ordning, så att appen fortsätter fungera
+// även om Claude-kontot får slut på kredit (vilket annars stoppar allt):
+//   1. Claude (bäst kvalitet) – söker fritt på webben via Anthropics
+//      inbyggda web_search/web_fetch-verktyg. Varje källa Claude anger
+//      kontrolleras mot det som faktiskt kom tillbaka från sökningen.
+//   2. Groq (gratis) – ingen inbyggd webbsökning i gratisläget, så den
+//      väljer och skriver istället utifrån riktiga RSS-artiklar som
+//      Workern själv hämtat från en liten lista trovärdiga källor.
+//      Källan är då artikelns egen länk – redan verifierad per
+//      konstruktion, ingen efterhandskontroll behövs.
+//   3. Mistral (gratis) – samma RSS-baserade upplägg som Groq, sista
+//      utväg om både Claude och Groq strular.
+// Claude provas först (och används ensam) om den lyckas – gratisspåren
+// är bara en reserv, inte en permanent nedgradering. Viktigt: ett
+// AVSIKTLIGT tomt resultat (Claude/barnprompten hittade inget passande)
+// räknas INTE som ett fel och leder ALDRIG vidare till nästa leverantör
+// – bara faktiska fel (nätverksfel, slut kredit, API-fel) gör det.
 //
 // Inget npm-beroende, inget byggsteg. Driftsätts med `npx wrangler deploy`
 // från den här mappen (se wrangler.toml), eller klistras in rakt av i
 // Cloudflares dashboard ("Create Worker" → "Quick edit").
 //
-// Krävs: en secret ANTHROPIC_API_KEY (`npx wrangler secret put
-// ANTHROPIC_API_KEY`). Den nås ALDRIG av webbappen – bara av den här
-// servern.
+// Secrets (`npx wrangler secret put NAMN`), minst en krävs:
+//   ANTHROPIC_API_KEY  – console.anthropic.com (betald, bäst kvalitet)
+//   GROQ_API_KEY       – console.groq.com (gratis, inget kreditkort)
+//   MISTRAL_API_KEY    – console.mistral.ai (gratis, begränsad kvot)
+// Ingen av dem når ALDRIG webbappen – bara den här servern. Se
+// README.md för hur du skaffar dem.
 
 const CLAUDE_MODEL = "claude-opus-5-5";
 // Barnläget använder en billigare, snabbare modell och färre sökningar
 // – dels för kostnad, dels för att hålla sökytan (vad Claude ens läser
 // under tiden) mindre för ett barns innehåll.
 const KID_CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+// Modellnamn hos gratisleverantörerna ändras då och då – kontrollera
+// console.groq.com/docs/models respektive docs.mistral.ai/getting-started/models
+// om ett av gratisspåren börjar ge "model not found".
+const GROQ_MODEL = "llama-3.3-70b-versatile";
+const MISTRAL_MODEL = "mistral-small-latest";
 const DEFAULT_ARTICLE_COUNT = 5;
 const MAX_ARTICLE_COUNT = 8;
 const MAX_KID_ARTICLE_COUNT = 5;
@@ -42,7 +64,7 @@ function json(data, status = 200) {
   });
 }
 
-// ---- Prompt ----
+// ---- Prompt (Claude-spåret) ----
 
 const SYSTEM_PROMPT = `Du är redaktör för en svensk kunskapsapp i stil med DeepStash. Din uppgift är att använda webbsökning för att hitta genuint förvånande, konkreta "visste du att"-insikter – nya forskningsrön eller tidlösa fakta – och skriva korta, egna artiklar om dem på svenska.
 
@@ -361,6 +383,291 @@ function verifyArticles(articles, seenUrls) {
     }));
 }
 
+// Kör Claude-spåret och formar resultatet. Kastar vidare (ger
+// orchestratorn nedan chansen att falla tillbaka på gratisspåren) om
+// själva anropet misslyckas – men INTE om Claude medvetet lämnade färre
+// eller inga artiklar, vilket är ett giltigt, avsiktligt utfall.
+async function runClaude(apiKey, input) {
+  const { articles, seenUrls } = await writeArticles(apiKey, input);
+  const items = verifyArticles(articles, seenUrls);
+  const dropped = articles.length - items.length;
+  const failures =
+    dropped > 0
+      ? [{ feed: { name: "Källkontroll" }, message: `${dropped} artikel(ar) togs bort eftersom källorna inte kunde bekräftas.` }]
+      : [];
+  return { items, failures, provider: "claude" };
+}
+
+// ---- Gratisspåren (Groq/Mistral): RSS i stället för webbsökning ----
+//
+// Ingen av gratisnivåerna ger pålitlig, kostnadsfri webbsökning, så de
+// här spåren väljer och skriver istället utifrån artiklar Workern SJÄLV
+// hämtat från en liten, handplockad lista trovärdiga käll-flöden. Det
+// gör källkontrollen trivial (länken är redan den vi själva hämtade –
+// ingen risk för påhittade URL:er) men begränsar utbudet till det som
+// faktiskt finns i de flödena just nu.
+
+const FREE_PIPELINE_FEEDS = [
+  { name: "Smithsonian Magazine – Science & Nature", url: "https://www.smithsonianmag.com/rss/science-nature/" },
+  { name: "ScienceDaily – Top Science", url: "https://feeds.sciencedaily.com/sciencedaily/top_news/top_science" },
+  { name: "NASA", url: "https://www.nasa.gov/feed/" },
+];
+const MAX_FREE_CANDIDATES = 20;
+const FREE_FEED_FETCH_TIMEOUT_MS = 10000;
+
+// ---- Minimal RSS/Atom-parsning utan DOM (Workers har ingen DOMParser) ----
+
+function stripCdata(s) {
+  const m = s.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
+  return m ? m[1] : s;
+}
+
+function decodeEntitiesAndStripTags(s) {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTag(block, tag) {
+  const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  if (!m) return "";
+  return decodeEntitiesAndStripTags(stripCdata(m[1]));
+}
+
+function extractLink(block) {
+  const plain = block.match(/<link[^>]*>([^<]+)<\/link>/i);
+  if (plain && plain[1].trim()) return plain[1].trim();
+  const atomHref = block.match(/<link[^>]+href=["']([^"']+)["']/i);
+  return atomHref ? atomHref[1] : "";
+}
+
+function parseFeed(xml, sourceName) {
+  const itemRe = /<item\b[\s\S]*?<\/item>/gi;
+  let blocks = xml.match(itemRe) || [];
+  if (blocks.length === 0) {
+    blocks = xml.match(/<entry\b[\s\S]*?<\/entry>/gi) || [];
+  }
+
+  return blocks
+    .map((block) => {
+      const title = extractTag(block, "title") || "(Utan titel)";
+      const link = extractLink(block);
+      const summaryRaw =
+        (block.match(/<description[^>]*>([\s\S]*?)<\/description>/i) ||
+          block.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i) ||
+          block.match(/<content[^>]*>([\s\S]*?)<\/content>/i) || [, ""])[1];
+      const summary = decodeEntitiesAndStripTags(stripCdata(summaryRaw || "")).slice(0, 600);
+      return { title, link, summary, source: sourceName };
+    })
+    .filter((it) => it.link);
+}
+
+async function fetchWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: { "user-agent": "Mozilla/5.0 (compatible; StashBot/1.0)" },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchAllFeeds(feeds) {
+  const items = [];
+  const failures = [];
+
+  await Promise.all(
+    feeds.map(async (feed) => {
+      try {
+        const res = await fetchWithTimeout(feed.url, FREE_FEED_FETCH_TIMEOUT_MS);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const xml = await res.text();
+        items.push(...parseFeed(xml, feed.name));
+      } catch (err) {
+        failures.push(`${feed.name}: ${err.message || String(err)}`);
+      }
+    })
+  );
+
+  const seenLinks = new Set();
+  const deduped = items.filter((it) => {
+    if (seenLinks.has(it.link)) return false;
+    seenLinks.add(it.link);
+    return true;
+  });
+
+  return { items: deduped, failures };
+}
+
+// Egna, kortare prompts för gratisspåret: modellen får INGEN
+// webbsökning här, bara de redan hämtade RSS-sammanfattningarna – den
+// får uttryckligen inte hitta på fakta utöver det som faktiskt står i
+// dem. Barnreglerna är lika strikta som i Claude-spåret.
+const FREE_SYSTEM_PROMPT = `Du är redaktör för en svensk kunskapsapp i stil med DeepStash. Du får en numrerad lista med redan hämtade artikelsammanfattningar från trovärdiga källor. Välj ut de mest intressanta/förvånande och skriv en kort, egen svensk artikel om var och en – UTIFRÅN ENDAST det som faktiskt står i sammanfattningen, hitta aldrig på fakta som inte finns där.
+
+Varje vald artikel: en "idé" (en fängslande mening, max 160 tecken) och en brödtext (120–220 ord) på svenska, med egna ord.
+
+Avsluta genom att anropa verktyget return_articles exakt en gång med dina val (index från listan, idé, brödtext). Är inget av det tillräckligt intressant: returnera en tom lista.`;
+
+const FREE_SYSTEM_PROMPT_KIDS = `Du är redaktör för en svensk kunskapsapp i stil med DeepStash, riktad till BARN i åldern 8–12 år. Du får en numrerad lista med redan hämtade artikelsammanfattningar. Välj ENDAST sådant som passar barn 8–12 år rakt igenom, och skriv en kort, egen, glad svensk artikel om varje val – UTIFRÅN ENDAST det som faktiskt står i sammanfattningen, hitta aldrig på fakta som inte finns där.
+
+VIKTIGASTE REGLERNA:
+- Välj ALDRIG något som handlar om (eller ens nämner) våld, död eller skador, krig, brott, olyckor eller katastrofer, vuxet/sexuellt innehåll, droger/alkohol, politik, eller sådant som kan vara läskigt.
+- Är du det minsta osäker på om en sammanfattning passar ett barn – hoppa över den.
+- "Idé"-meningen: max 120 tecken, glatt och nyfiket tonfall. Brödtexten: 60–120 ord, enkla ord.
+
+Hittar du inget som passar helt och hållet: returnera en tom lista – det är ett bra, tryggt resultat.
+
+Avsluta genom att anropa verktyget return_articles exakt en gång med dina val (index från listan, idé, brödtext).`;
+
+function buildFreeUserMessage(candidates, { count, avoid, kidMode }) {
+  const listing = candidates
+    .map((it, i) => `${i + 1}. [${it.source}] ${it.title}\n${it.summary}`)
+    .join("\n\n");
+  const avoidBlock =
+    Array.isArray(avoid) && avoid.length > 0
+      ? `\n\nHoppa över dessa – användaren har redan sett dem:\n${avoid
+          .slice(0, 60)
+          .map((t) => `- ${t}`)
+          .join("\n")}`
+      : "";
+  return `Välj högst ${count} av de mest intressanta artiklarna nedan och skriv varsin kort svensk artikel.${avoidBlock}\n\nArtiklar:\n${listing}`;
+}
+
+// OpenAI-kompatibelt function-calling-schema (Groq och Mistral delar
+// detta API-format, till skillnad från Claudes egen tools-form ovan).
+const FREE_RETURN_IDEAS_TOOL = {
+  type: "function",
+  function: {
+    name: "return_articles",
+    description: "Returnerar de valda och skrivna artiklarna.",
+    parameters: {
+      type: "object",
+      required: ["articles"],
+      properties: {
+        articles: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["index", "idea", "body"],
+            properties: {
+              index: { type: "integer", description: "1-baserat index i artikellistan" },
+              idea: { type: "string", description: "Fängslande svensk mening" },
+              body: { type: "string", description: "Svensk brödtext" },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+async function callOpenAICompatible(baseUrl, apiKey, model, messages) {
+  const res = await fetch(baseUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      messages,
+      tools: [FREE_RETURN_IDEAS_TOOL],
+      tool_choice: { type: "function", function: { name: "return_articles" } },
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+  if (!toolCall) throw new Error("Inget strukturerat svar.");
+  return JSON.parse(toolCall.function.arguments);
+}
+
+async function writeArticlesFree(providerLabel, { baseUrl, model }, apiKey, input) {
+  const { count, avoid, kidMode } = input;
+  const { items: allCandidates, failures: feedFailures } = await fetchAllFeeds(FREE_PIPELINE_FEEDS);
+  if (allCandidates.length === 0) {
+    throw new Error(`Inga flöden kunde hämtas (${feedFailures.join("; ") || "okänt fel"}).`);
+  }
+
+  const candidates = allCandidates.slice(0, MAX_FREE_CANDIDATES);
+  const messages = [
+    { role: "system", content: kidMode ? FREE_SYSTEM_PROMPT_KIDS : FREE_SYSTEM_PROMPT },
+    { role: "user", content: buildFreeUserMessage(candidates, { count, avoid, kidMode }) },
+  ];
+
+  const { articles } = await callOpenAICompatible(baseUrl, apiKey, model, messages);
+  const items = (Array.isArray(articles) ? articles : [])
+    .map((sel) => {
+      const candidate = candidates[Number(sel.index) - 1];
+      if (!candidate || !sel.idea || !sel.body) return null;
+      return {
+        title: candidate.title,
+        idea: sel.idea,
+        body: sel.body,
+        link: candidate.link,
+        source: candidate.source,
+        sources: [{ title: candidate.source, url: candidate.link }],
+      };
+    })
+    .filter(Boolean);
+
+  return { items, failures: [], provider: providerLabel.toLowerCase() };
+}
+
+// ---- Orchestrator: Claude → Groq → Mistral ----
+
+async function getArticles(env, input) {
+  const attempts = [];
+
+  if (env.ANTHROPIC_API_KEY) {
+    try {
+      return await runClaude(env.ANTHROPIC_API_KEY, input);
+    } catch (err) {
+      attempts.push(`Claude: ${err.message || err}`);
+    }
+  } else {
+    attempts.push("Claude: ANTHROPIC_API_KEY saknas.");
+  }
+
+  if (env.GROQ_API_KEY) {
+    try {
+      return await writeArticlesFree(
+        "Groq",
+        { baseUrl: "https://api.groq.com/openai/v1/chat/completions", model: GROQ_MODEL },
+        env.GROQ_API_KEY,
+        input
+      );
+    } catch (err) {
+      attempts.push(`Groq: ${err.message || err}`);
+    }
+  }
+
+  if (env.MISTRAL_API_KEY) {
+    try {
+      return await writeArticlesFree(
+        "Mistral",
+        { baseUrl: "https://api.mistral.ai/v1/chat/completions", model: MISTRAL_MODEL },
+        env.MISTRAL_API_KEY,
+        input
+      );
+    } catch (err) {
+      attempts.push(`Mistral: ${err.message || err}`);
+    }
+  }
+
+  throw new Error(`Alla AI-leverantörer misslyckades. ${attempts.join(" | ")}`);
+}
+
 async function readInput(request) {
   const body = await request.json().catch(() => ({}));
   const kidMode = body.kidMode === true;
@@ -388,8 +695,11 @@ export default {
     if (request.method !== "POST") {
       return json({ error: "Använd POST {preferences, liked, disliked, avoid, count}." }, 405);
     }
-    if (!env.ANTHROPIC_API_KEY) {
-      return json({ error: "ANTHROPIC_API_KEY saknas i Workerns inställningar." }, 500);
+    if (!env.ANTHROPIC_API_KEY && !env.GROQ_API_KEY && !env.MISTRAL_API_KEY) {
+      return json(
+        { error: "Ingen AI-leverantör är inställd. Lägg till minst en secret: ANTHROPIC_API_KEY, GROQ_API_KEY eller MISTRAL_API_KEY." },
+        500
+      );
     }
 
     const input = await readInput(request);
@@ -406,14 +716,7 @@ export default {
     const work = (async () => {
       let result;
       try {
-        const { articles, seenUrls, searches } = await writeArticles(env.ANTHROPIC_API_KEY, input);
-        const items = verifyArticles(articles, seenUrls);
-        const dropped = articles.length - items.length;
-        const failures =
-          dropped > 0
-            ? [{ feed: { name: "Källkontroll" }, message: `${dropped} artikel(ar) togs bort eftersom källorna inte kunde bekräftas.` }]
-            : [];
-        result = { items, failures, searches };
+        result = await getArticles(env, input);
       } catch (err) {
         result = { error: err.message || String(err) };
       }

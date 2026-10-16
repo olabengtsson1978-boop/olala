@@ -119,14 +119,57 @@ Eller via Cloudflares dashboard, ~5 minuter, en gång:
 
 Fungerar det inte: felmeddelandet från Workern visas ovanför förslagen.
 
+### Gratis reservläge (Groq/Mistral) om Claude-kontot får slut på kredit
+
+Workern provar upp till tre AI-leverantörer i ordning – **Claude**
+(bäst kvalitet, kräver betalkredit) → **Groq** (gratis) → **Mistral**
+(gratis) – och faller bara vidare till nästa om den föregående faktiskt
+misslyckas (t.ex. slut kredit, nätverksfel). Hittar Claude medvetet
+inga passande artiklar (särskilt vanligt i barnläget) räknas det INTE
+som ett fel och ingen gratisleverantör kontaktas – då visas bara "inga
+nya förslag" som vanligt.
+
+Gratisleverantörerna har ingen kostnadsfri webbsökning, så de väljer
+och skriver istället utifrån några handplockade, trovärdiga RSS-källor
+(Smithsonian, ScienceDaily, NASA) som Workern hämtar själv – källan blir
+artikelns egen länk, redan verifierad per konstruktion.
+
+Valfritt att sätta upp, men rekommenderat som krockkudde mot precis det
+scenariot i skärmdumpen ovan ("Your credit balance is too low"):
+
+1. **Groq** (gratis, inget kreditkort): skapa konto på
+   [console.groq.com](https://console.groq.com/) → **API Keys** →
+   **Create API Key**.
+2. **Mistral** (gratis, begränsad kvot): skapa konto på
+   [console.mistral.ai](https://console.mistral.ai/) → **API Keys** →
+   **Create new key**.
+3. Lägg till som secrets i din Worker (samma sätt som
+   `ANTHROPIC_API_KEY` ovan, eller från terminalen):
+
+   ```
+   npx wrangler secret put GROQ_API_KEY
+   npx wrangler secret put MISTRAL_API_KEY
+   ```
+
+   Du behöver inte ha alla tre – Workern använder bara de secrets som
+   faktiskt finns inställda (saknas `ANTHROPIC_API_KEY` helt provas
+   Groq direkt, osv.). Saknas samtliga tre visas ett tydligt
+   felmeddelande om att ingen leverantör är inställd.
+
+När ett gratisspår faktiskt användes visas en liten diskret notis ovanför
+förslagen ("Hämtat via gratisläget Groq …"), så du vet att det inte var
+Claude som skrev artiklarna den gången.
+
 **Vad som skickas iväg**: varje gång du ber om nya förslag skickar
 appen din fritext under "Dina intressen", texten+taggarna från dina
 senaste sparade kort, och rubrikerna på artiklar du redan sett eller
 hoppat över – till din egen Worker och vidare till Claude, för att
 personalisera förslagen och undvika upprepningar. Claude söker sedan
 på nätet via Anthropics webbsökning. Inget av detta delas med någon
-annan än dig, din Worker och ditt eget Anthropic-konto. **Barnversionen
-skickar inget av detta** (se nedan).
+annan än dig, din Worker och ditt eget Anthropic-konto (eller, om
+Claude-anropet misslyckas och ett gratisspår tar över, ditt Groq-
+respektive Mistral-konto – se nedan). **Barnversionen skickar inget av
+detta** (se nedan).
 
 **Viktigt om du redan har en egen Worker driftsatt**: barnläget (nästa
 avsnitt) är en ny del av `worker/worker.js`. Har du redan en Worker
@@ -181,7 +224,7 @@ enstaka källor eller ämnen. Fortsätt använda ditt omdöme som vuxen.
 | `barn-bibliotek.html` | Barnversionens bibliotek (återanvänder `library.js`, men mot barnets egen lagring) |
 | `barn-repetera.html` | Barnversionens repetition (återanvänder `review.js`, men mot barnets egen lagring) |
 | `kids.css` | Lekfull stil för barnsidorna, läses utöver `styles.css` |
-| `worker/worker.js` | Cloudflare Worker: Claude söker på nätet, skriver artiklar, källorna kontrolleras, inkl. det separata barnsäkra spåret (se ovan) |
+| `worker/worker.js` | Cloudflare Worker: Claude söker på nätet och skriver artiklar (med Groq/Mistral som gratis reservspår om Claude strular), källorna kontrolleras, inkl. det separata barnsäkra spåret (se ovan) |
 | `worker/wrangler.toml` | Driftsättningsinställningar för Workern (`npx wrangler deploy`) |
 | `manifest.webmanifest` | PWA-metadata (namn, ikoner, installationsbeteende) |
 | `service-worker.js` | Cachar appskalet för offline-bruk |

@@ -44,6 +44,15 @@ när du ber om nya förslag.
 - **Installerbar (PWA)**: lägg till på hemskärmen/skrivbordet via
   webbläsarens installationsknapp – fungerar sedan som en fristående
   app, utan att gå via någon app store.
+- **Barnversion** (`barn.html`, `barn-bibliotek.html`,
+  `barn-repetera.html`): en egen uppsättning sidor för åldern 8–12 år,
+  med glad/färgglad stil (`kids.css`) och enklare text. Delar lagring
+  (kort, stashes, Worker-URL) med vuxenversionen – ställ in Worker-URL
+  en gång på de vanliga sidorna (eller använd standarden), så fungerar
+  det automatiskt på barnsidorna också. Sökningen och skrivandet körs
+  genom ett helt eget, strikt barnsäkert spår i Workern (`kidMode`) –
+  inte bara en annan stil på samma prompt. Se "Säkerheten i
+  barnversionen" nedan.
 
 ## Köra lokalt
 
@@ -109,7 +118,42 @@ senaste sparade kort, och rubrikerna på artiklar du redan sett eller
 hoppat över – till din egen Worker och vidare till Claude, för att
 personalisera förslagen och undvika upprepningar. Claude söker sedan
 på nätet via Anthropics webbsökning. Inget av detta delas med någon
-annan än dig, din Worker och ditt eget Anthropic-konto.
+annan än dig, din Worker och ditt eget Anthropic-konto. **Barnversionen
+skickar inget av detta** (se nedan).
+
+**Viktigt om du redan har en egen Worker driftsatt**: barnläget (nästa
+avsnitt) är en ny del av `worker/worker.js`. Har du redan en Worker
+igång måste du driftsätta om den (samma steg som ovan: klistra in den
+uppdaterade `worker.js`-koden igen, eller `npx wrangler deploy`) för att
+`barn.html` ska fungera – annars saknar din Worker stödet för
+`kidMode`.
+
+### Säkerheten i barnversionen
+
+Barnsidornas förslag går genom ett **helt separat, strikt säkerhetsspår**
+i Workern (`kidMode: true`), inte samma sökning/prompt som
+vuxenversionen med en annan stil på:
+
+- Claude får en egen systemprompt med uttryckliga uteslutningsregler:
+  våld, död, krig, brott, olyckor, vuxet/sexuellt innehåll,
+  droger/alkohol, politik och skrämmande ämnen söks och skrivs aldrig
+  om. Är AI:n det minsta osäker väljer den hellre bort ämnet än tar med
+  det – och att lämna få eller inga artiklar är ett uttryckligt
+  godkänt, bra resultat, inte ett fel.
+- Körs med en billigare, snabbare modell (Claude Haiku) och ungefär
+  halva sök-/hämtningsbudgeten jämfört med vuxenversionen – lägre
+  kostnad per hämtning, och en mindre yta av webben Claude över huvud
+  taget läser under tiden.
+- Ingen personalisering skickas med (inga uttalade intressen, inga
+  sparade/ogillade exempel) – barnets förslag bygger aldrig på en
+  vuxens historik, och ingen beteendeprofil byggs upp kring barnet.
+- Samma källkontroll som vuxenversionen: en artikel utan en bekräftad
+  källa (en URL som faktiskt dök upp i sökningen) tas bort.
+- Går något fel (saknad API-nyckel, Claude-fel) visas bara ett
+  felmeddelande, aldrig något ogranskat innehåll.
+
+Det här är ett rimligt försvar men ingen garanti – en AI kan missbedöma
+enstaka källor eller ämnen. Fortsätt använda ditt omdöme som vuxen.
 
 ## Struktur
 
@@ -122,7 +166,11 @@ annan än dig, din Worker och ditt eget Anthropic-konto.
 | `storage.js` | Delad lagrings- och repetitionslogik (Leitner), stashes, flöden, Worker-URL |
 | `library.html/js` | Bibliotek: sök/filter/redigering, stashes, export/import |
 | `review.html/js` | Repetitionsflödet |
-| `worker/worker.js` | Cloudflare Worker: Claude söker på nätet, skriver artiklar, källorna kontrolleras (se ovan) |
+| `barn.html/js` | Barnversionens Upptäck-sida (egen stil/text, kidMode-granskning) |
+| `barn-bibliotek.html` | Barnversionens bibliotek (återanvänder `library.js`) |
+| `barn-repetera.html` | Barnversionens repetition (återanvänder `review.js`) |
+| `kids.css` | Lekfull stil för barnsidorna, läses utöver `styles.css` |
+| `worker/worker.js` | Cloudflare Worker: Claude söker på nätet, skriver artiklar, källorna kontrolleras, inkl. det separata barnsäkra spåret (se ovan) |
 | `worker/wrangler.toml` | Driftsättningsinställningar för Workern (`npx wrangler deploy`) |
 | `manifest.webmanifest` | PWA-metadata (namn, ikoner, installationsbeteende) |
 | `service-worker.js` | Cachar appskalet för offline-bruk |

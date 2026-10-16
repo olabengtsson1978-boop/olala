@@ -1,0 +1,173 @@
+/* Lekfull stil för barnsidorna (barn.html, barn-bibliotek.html,
+   barn-repetera.html). Laddas EFTER styles.css och skriver bara över
+   det som behöver kännas roligare/större/tydligare för 8–12-åringar –
+   all grundfunktionalitet och alla klassnamn är desamma som i
+   vuxenversionen. */
+
+body {
+  font-family: "Comic Sans MS", "Chalkboard SE", "Baloo 2", -apple-system, sans-serif;
+  background: #fff6e0;
+  font-size: 17px;
+}
+
+.nav {
+  border-bottom: 3px solid #ffd166;
+  font-size: 16px;
+  gap: 18px;
+}
+
+.nav .brand {
+  color: #ff6b35;
+  font-size: 20px;
+}
+
+.nav a {
+  color: #2ec4b6;
+  font-weight: 700;
+}
+
+.nav a.active {
+  color: #ff6b35;
+}
+
+h1 {
+  font-size: 24px;
+  color: #ff6b35;
+}
+
+h2 {
+  font-size: 16px !important;
+}
+
+.card {
+  border: 3px solid #ffe29a;
+  border-radius: 20px;
+  padding: 16px 18px;
+}
+
+.card-text {
+  font-size: 18px;
+}
+
+.idea-text {
+  font-family: "Comic Sans MS", "Chalkboard SE", "Baloo 2", -apple-system, sans-serif;
+  font-size: 22px;
+  color: #2b2b2b;
+}
+
+.idea-text::before {
+  color: #ff6b35;
+  opacity: 0.6;
+}
+
+.idea-byline {
+  font-size: 14px;
+}
+
+.suggestion-image {
+  border-radius: 20px 20px 0 0;
+}
+
+.suggestion-image-fallback {
+  font-family: "Comic Sans MS", "Chalkboard SE", "Baloo 2", -apple-system, sans-serif;
+}
+
+.source-badge {
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+/* Utfällbar artikel med källförteckning */
+.article summary {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2ec4b6;
+}
+
+.article-body {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.article-sources-label {
+  font-size: 13px;
+  color: #ff6b35;
+  font-weight: 700;
+}
+
+.article-sources {
+  font-size: 13px;
+}
+
+button {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 12px 20px;
+  border-radius: 999px;
+  border: 3px solid #2ec4b6;
+  color: #2ec4b6;
+  background: #fff;
+  min-height: 48px;
+}
+
+button.primary {
+  background: #ff6b35;
+  color: #fff;
+  border-color: #ff6b35;
+}
+
+button.danger {
+  background: #fff;
+  color: #ff5a5f;
+  border-color: #ff5a5f;
+}
+
+.speaker-btn {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  font-size: 20px;
+  border-color: #ffb703;
+  color: #ffb703;
+}
+
+.speaker-btn.speaking {
+  background: #ffb703;
+  color: #fff;
+  border-color: #ffb703;
+}
+
+textarea, input[type="text"], select {
+  font-size: 16px;
+  border: 3px solid #ffe29a;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.tag {
+  background: #d4f5f1;
+  color: #15847a;
+  font-size: 13px;
+  padding: 4px 10px;
+}
+
+.stash-chip {
+  background: #ffe8d6;
+  color: #ff6b35;
+}
+
+.review-card {
+  border: 4px solid #ffd166;
+  border-radius: 24px;
+  font-size: 24px;
+}
+
+.review-card-inner {
+  font-family: "Comic Sans MS", "Chalkboard SE", "Baloo 2", -apple-system, sans-serif;
+}
+
+.muted {
+  font-size: 16px;
+}

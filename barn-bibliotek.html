@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stash för barn – Mitt förråd</title>
+  <meta name="theme-color" content="#ff6b35">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon128.png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="kids.css">
+  <style>body { max-width: 680px; margin: 0 auto; padding: 24px 16px; }</style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🧸 Stash för barn</span>
+    <a href="barn.html">Upptäck</a>
+    <a href="barn-bibliotek.html" class="active">Mitt förråd</a>
+    <a href="barn-repetera.html">Minnesspel</a>
+    <a href="library.html" style="margin-left:auto;font-size:13px;">För vuxna →</a>
+  </nav>
+
+  <h1>Allt du har sparat 📦</h1>
+  <div class="links">
+    <a href="#" id="export-btn">Spara en säkerhetskopia</a>
+    <a href="#" id="import-btn">Hämta tillbaka en kopia</a>
+    <input type="file" id="import-file" accept="application/json" hidden>
+  </div>
+
+  <h2 style="font-size:13px;color:#888;margin:0 0 6px;">Mina förråd</h2>
+  <div id="stash-filters" class="tags" style="margin-bottom:8px;"></div>
+  <div class="row">
+    <input type="text" id="new-stash-name" placeholder="Nytt förråd…">
+    <button id="add-stash-btn">Skapa</button>
+  </div>
+
+  <div class="row">
+    <input type="text" id="search" placeholder="Sök bland dina kort…">
+  </div>
+  <h2 style="font-size:13px;color:#888;margin:0 0 6px;">Etiketter</h2>
+  <div id="tag-filters" class="tags" style="margin-bottom:14px;"></div>
+
+  <div id="list"></div>
+
+  <script src="storage.js"></script>
+  <script src="speech.js"></script>
+  <script src="library.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>

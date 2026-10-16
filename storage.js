@@ -9,6 +9,7 @@ const SEEN_KEY = "stashSeenSuggestions";
 const WORKER_URL_KEY = "stashWorkerUrl";
 const PREFERENCES_KEY = "stashPreferences";
 const PENDING_SUGGESTIONS_KEY = "stashPendingSuggestions";
+const PENDING_KID_SUGGESTIONS_KEY = "stashPendingKidSuggestions";
 
 // Leitner-lådor: hur många dagar tills ett kort dyker upp igen
 // efter att man svarat "Kom ihåg" i den lådan.
@@ -253,6 +254,23 @@ async function savePendingSuggestions(items) {
 async function removePendingSuggestion(link) {
   const items = await getPendingSuggestions();
   await savePendingSuggestions(items.filter((it) => it.link !== link));
+}
+
+// Samma sak, fast för barnsidans förslag – en egen pott så att
+// barnversionens och vuxenversionens "väntande förslag" aldrig blandas
+// ihop eller skriver över varandra, trots att de delar övrig lagring.
+
+async function getPendingKidSuggestions() {
+  return readJSON(PENDING_KID_SUGGESTIONS_KEY, []);
+}
+
+async function savePendingKidSuggestions(items) {
+  writeJSON(PENDING_KID_SUGGESTIONS_KEY, items);
+}
+
+async function removePendingKidSuggestion(link) {
+  const items = await getPendingKidSuggestions();
+  await savePendingKidSuggestions(items.filter((it) => it.link !== link));
 }
 
 // "Sedda" förslag (sparade eller nedtackade) döljs i kommande

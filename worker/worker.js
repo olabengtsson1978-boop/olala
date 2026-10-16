@@ -18,8 +18,13 @@
 // servern.
 
 const CLAUDE_MODEL = "claude-opus-5-5";
+// Barnläget använder en billigare, snabbare modell och färre sökningar
+// – dels för kostnad, dels för att hålla sökytan (vad Claude ens läser
+// under tiden) mindre för ett barns innehåll.
+const KID_CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 const DEFAULT_ARTICLE_COUNT = 5;
 const MAX_ARTICLE_COUNT = 8;
+const MAX_KID_ARTICLE_COUNT = 5;
 const MAX_CONTINUATIONS = 4;
 
 function corsHeaders() {
@@ -55,6 +60,25 @@ Skrivkrav:
 
 Avsluta genom att anropa verktyget return_articles exakt en gång med alla artiklar.`;
 
+// Egen, fristående prompt för barnläget – INTE en variant av
+// SYSTEM_PROMPT ovan. Viktigast av allt: strikta uteslutningsregler och
+// uttrycklig tillåtelse att hellre lämna få eller inga artiklar än att
+// riskera något olämpligt.
+const SYSTEM_PROMPT_KIDS = `Du är redaktör för en svensk kunskapsapp i stil med DeepStash, riktad till BARN i åldern 8–12 år. Din uppgift är att använda webbsökning för att hitta genuint förvånande men HELT ÅLDERSANPASSADE "visste du att"-fakta, och skriva korta, egna artiklar om dem på enkel svenska.
+
+VIKTIGASTE REGLERNA – följ dem alltid, före allt annat:
+- Sök och skriv ENDAST om ämnen som passar barn 8–12 år rakt igenom: djur och natur, rymden, människokroppen, uppfinningar, vardagsvetenskap, djurrekord, roliga historiska fakta och liknande.
+- Sök ALDRIG efter och ta ALDRIG med källor eller fakta som handlar om (eller ens nämner i förbigående): våld, död eller skador, krig, brott, olyckor eller katastrofer, vuxet eller sexuellt innehåll, droger eller alkohol, politik eller val, eller sådant som kan vara läskigt eller oroväckande.
+- Är du det minsta osäker på om ett ämne eller en källa passar ett barn – välj ett annat ämne istället. Det är mycket bättre med få artiklar än en olämplig.
+- Skriv korta, glada meningar med ett nyfiket, peppigt tonfall – som att berätta något spännande för en kompis. Använd enkla, lättförståeliga ord och förklara svåra ord kort om de behövs.
+- "Idé"-meningen: max 120 tecken. Brödtexten: 60–120 ord.
+
+Källkrav: samma försiktighet som alltid – använd bara trovärdiga, verifierbara källor, och ange bara URL:er som faktiskt förekommit i dina sök- eller hämtningsresultat. Kan något inte beläggas ordentligt, ta inte med det.
+
+Hittar du inte tillräckligt många artiklar som är helt lämpliga för ett barn: returnera färre, eller till och med inga alls. Det är ett bra och tryggt resultat, inte ett misslyckande.
+
+Avsluta genom att anropa verktyget return_articles exakt en gång med de artiklar du är helt trygg med (kan vara en tom lista).`;
+
 // Bygger ett personaliseringsstycke av uttalade intressen plus exempel
 // på vad användaren brukar spara (gillar) respektive hoppa över
 // (ogillar troligen) – tomt om inget av det finns.
@@ -87,7 +111,7 @@ function buildPersonalizationBlock({ preferences, liked, disliked }) {
   )}`;
 }
 
-function buildUserMessage({ count, preferences, liked, disliked, avoid }) {
+function buildUserMessage({ count, preferences, liked, disliked, avoid, kidMode }) {
   const avoidBlock =
     Array.isArray(avoid) && avoid.length > 0
       ? `\n\nSkriv INTE om samma sak som dessa rubriker användaren redan sett:\n${avoid
@@ -95,7 +119,11 @@ function buildUserMessage({ count, preferences, liked, disliked, avoid }) {
           .map((t) => `- ${t}`)
           .join("\n")}`
       : "";
-  return `Hitta och skriv ${count} artiklar.${buildPersonalizationBlock({ preferences, liked, disliked })}${avoidBlock}`;
+  // Ingen personalisering i barnläget, även om klienten skulle råka
+  // skicka med den – barnets förslag ska inte byggas på en vuxens
+  // sparade/ogillade historik.
+  const personalizationBlock = kidMode ? "" : buildPersonalizationBlock({ preferences, liked, disliked });
+  return `Hitta och skriv ${count} artiklar.${personalizationBlock}${avoidBlock}`;
 }
 
 const RETURN_ARTICLES_TOOL = {
@@ -139,7 +167,7 @@ const RETURN_ARTICLES_TOOL = {
 
 // ---- Claude-anrop ----
 
-async function callClaude(apiKey, messages) {
+async function callClaude(apiKey, messages, { kidMode } = {}) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -149,14 +177,16 @@ async function callClaude(apiKey, messages) {
       "anthropic-beta": "server-side-fallback-2026-07-01",
     },
     body: JSON.stringify({
-      model: CLAUDE_MODEL,
+      model: kidMode ? KID_CLAUDE_MODEL : CLAUDE_MODEL,
       max_tokens: 16000,
       output_config: { effort: "medium" },
       fallbacks: "default",
-      system: SYSTEM_PROMPT,
+      system: kidMode ? SYSTEM_PROMPT_KIDS : SYSTEM_PROMPT,
       tools: [
-        { type: "web_search_20260209", name: "web_search", max_uses: 12 },
-        { type: "web_fetch_20260209", name: "web_fetch", max_uses: 6 },
+        // Färre sökningar/hämtningar i barnläget: lägre kostnad och en
+        // mindre yta av webben Claude ens läser under tiden.
+        { type: "web_search_20260209", name: "web_search", max_uses: kidMode ? 6 : 12 },
+        { type: "web_fetch_20260209", name: "web_fetch", max_uses: kidMode ? 3 : 6 },
         RETURN_ARTICLES_TOOL,
       ],
       tool_choice: { type: "auto" },
@@ -274,13 +304,14 @@ function hostLabel(url) {
 }
 
 async function writeArticles(apiKey, input) {
+  const { kidMode } = input;
   const messages = [{ role: "user", content: buildUserMessage(input) }];
   const seenUrls = new Set();
   let searches = 0;
   let nudged = false;
 
   for (let turn = 0; turn <= MAX_CONTINUATIONS + 1; turn++) {
-    const data = await callClaude(apiKey, messages);
+    const data = await callClaude(apiKey, messages, { kidMode });
     if (data.stop_reason === "refusal") {
       throw new Error("Claude avböjde förfrågan.");
     }
@@ -300,7 +331,12 @@ async function writeArticles(apiKey, input) {
     // Claude slutade utan att lämna artiklarna – be en gång om dem.
     if (nudged) break;
     nudged = true;
-    messages.push({ role: "user", content: "Anropa return_articles nu med de artiklar du hittat belägg för." });
+    messages.push({
+      role: "user",
+      content: kidMode
+        ? "Anropa return_articles nu med de artiklar du hittat belägg för, eller en tom lista om inget passade ett barn."
+        : "Anropa return_articles nu med de artiklar du hittat belägg för.",
+    });
   }
 
   throw new Error("Claude lämnade inga artiklar.");
@@ -327,9 +363,16 @@ function verifyArticles(articles, seenUrls) {
 
 async function readInput(request) {
   const body = await request.json().catch(() => ({}));
-  const count = Math.min(Math.max(Number(body.count) || DEFAULT_ARTICLE_COUNT, 1), MAX_ARTICLE_COUNT);
+  const kidMode = body.kidMode === true;
+  const count = Math.min(
+    Math.max(Number(body.count) || DEFAULT_ARTICLE_COUNT, 1),
+    kidMode ? MAX_KID_ARTICLE_COUNT : MAX_ARTICLE_COUNT
+  );
   return {
     count,
+    kidMode,
+    // Personalisering ignoreras helt i barnläget (se buildUserMessage),
+    // men läses ändå in här bara för att inte krascha på oväntad input.
     preferences: typeof body.preferences === "string" ? body.preferences : "",
     liked: Array.isArray(body.liked) ? body.liked : [],
     disliked: Array.isArray(body.disliked) ? body.disliked : [],

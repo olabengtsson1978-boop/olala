@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stash för barn – Upptäck</title>
+  <meta name="theme-color" content="#ff6b35">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon128.png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="kids.css">
+  <style>body { max-width: 680px; margin: 0 auto; padding: 24px 16px 60px; }</style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🧸 Stash för barn</span>
+    <a href="barn.html" class="active">Upptäck</a>
+    <a href="barn-bibliotek.html">Mitt förråd</a>
+    <a href="barn-repetera.html">Minnesspel (<span id="due-count">0</span>)</a>
+    <a href="index.html" style="margin-left:auto;font-size:13px;">För vuxna →</a>
+  </nav>
+
+  <h1>Skriv något kul du vill spara</h1>
+  <textarea id="new-text" rows="3" placeholder="Skriv eller klistra in något roligt…"></textarea>
+  <div class="row">
+    <input type="text" id="new-tags" placeholder="Etiketter, t.ex. djur, rymden (valfritt)">
+    <select id="new-stash"></select>
+  </div>
+  <button class="primary" id="save-btn">Spara! 🎉</button>
+
+  <h1 style="margin-top:32px;">Visste du att… ✨</h1>
+  <p class="muted" id="suggestions-status" style="padding:0;text-align:left;">Letar efter kul fakta…</p>
+  <div id="suggestions-list"></div>
+  <button id="refresh-btn">Visa fler! 🔄</button>
+
+  <script src="storage.js"></script>
+  <script src="discover.js"></script>
+  <script src="speech.js"></script>
+  <script src="swipe.js"></script>
+  <script src="barn.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>

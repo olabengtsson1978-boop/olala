@@ -4,6 +4,7 @@
 // att källorna faktiskt kom från sökningen. Se README.md och worker/.
 
 const SUGGESTION_COUNT = 5;
+const KID_SUGGESTION_COUNT = 3;
 
 async function fetchFromWorker(workerUrl, payload) {
   const base = workerUrl.trim().replace(/\/$/, "");
@@ -60,6 +61,44 @@ async function fetchSuggestions() {
       liked,
       disliked,
       avoid,
+    });
+  } catch (err) {
+    return {
+      items: [],
+      failures: [{ feed: { name: "Worker" }, message: err.message }],
+      needsSetup: false,
+    };
+  }
+
+  const items = (data.items || []).filter((it) => it.link && !knownUrls.has(it.link));
+  return { items, failures: data.failures || [], needsSetup: false };
+}
+
+// Ber Workern om nya artiklar åt Barn-sidan. Samma Worker och delade
+// "sedda"-historik (för att undvika upprepning och dubbletter), men
+// INGEN personalisering (intressen/gillar/ogillar) skickas med – och
+// kidMode: true gör att Workern kör ett helt separat, strikt
+// barnsäkert spår istället för den vanliga skrivprocessen. Se
+// worker/worker.js.
+async function fetchKidSuggestions() {
+  const workerUrl = await getWorkerUrl();
+  if (!workerUrl) {
+    return { items: [], failures: [], needsSetup: true };
+  }
+
+  const [cards, seenEntries] = await Promise.all([getAllCards(), getSeenEntries()]);
+  const knownUrls = new Set([...cards.map((c) => c.sourceUrl).filter(Boolean), ...seenEntries.map((e) => e.link)]);
+  const avoid = seenEntries
+    .map((e) => e.title)
+    .filter(Boolean)
+    .slice(-60);
+
+  let data;
+  try {
+    data = await fetchFromWorker(workerUrl, {
+      count: KID_SUGGESTION_COUNT,
+      avoid,
+      kidMode: true,
     });
   } catch (err) {
     return {

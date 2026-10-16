@@ -161,7 +161,8 @@ async function loadSuggestions() {
   document.getElementById("suggestions-list").innerHTML = "";
   refreshBtn.disabled = true;
 
-  const { items, failures, needsSetup, provider } = await fetchKidSuggestions();
+  const topicHint = document.getElementById("topic-hint").value.trim();
+  const { items, failures, needsSetup, provider } = await fetchKidSuggestions(topicHint);
   refreshBtn.disabled = false;
   await savePendingSuggestions(items);
   renderSuggestions(items);

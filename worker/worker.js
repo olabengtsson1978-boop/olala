@@ -133,7 +133,15 @@ function buildPersonalizationBlock({ preferences, liked, disliked }) {
   )}`;
 }
 
-function buildUserMessage({ count, preferences, liked, disliked, avoid, kidMode }) {
+// topicHint är en engångsönskan för just den här förfrågan (t.ex. skrivs
+// in av ett barn på Upptäck-sidan) – INTE sparad personalisering, så den
+// byggs in oavsett kidMode, till skillnad från preferences/liked/disliked.
+function buildTopicHintBlock(topicHint) {
+  if (!topicHint || !topicHint.trim()) return "";
+  return `\n\nFör just den här förfrågan: användaren vill särskilt lära sig om "${topicHint.trim()}". Prioritera det ämnet om du hittar något bra och väl belagt om det – annars välj ett annat ämne istället för att tvinga fram en dålig eller osäker träff.`;
+}
+
+function buildUserMessage({ count, preferences, liked, disliked, avoid, kidMode, topicHint }) {
   const avoidBlock =
     Array.isArray(avoid) && avoid.length > 0
       ? `\n\nSkriv INTE om samma sak som dessa rubriker användaren redan sett:\n${avoid
@@ -145,7 +153,7 @@ function buildUserMessage({ count, preferences, liked, disliked, avoid, kidMode 
   // skicka med den – barnets förslag ska inte byggas på en vuxens
   // sparade/ogillade historik.
   const personalizationBlock = kidMode ? "" : buildPersonalizationBlock({ preferences, liked, disliked });
-  return `Hitta och skriv ${count} artiklar.${personalizationBlock}${avoidBlock}`;
+  return `Hitta och skriv ${count} artiklar.${personalizationBlock}${buildTopicHintBlock(topicHint)}${avoidBlock}`;
 }
 
 const RETURN_ARTICLES_TOOL = {
@@ -529,7 +537,7 @@ Hittar du inget som passar helt och hållet: returnera en tom lista – det är 
 
 Avsluta genom att anropa verktyget return_articles exakt en gång med dina val (index från listan, idé, brödtext).`;
 
-function buildFreeUserMessage(candidates, { count, avoid, kidMode }) {
+function buildFreeUserMessage(candidates, { count, avoid, kidMode, topicHint }) {
   const listing = candidates
     .map((it, i) => `${i + 1}. [${it.source}] ${it.title}\n${it.summary}`)
     .join("\n\n");
@@ -540,7 +548,14 @@ function buildFreeUserMessage(candidates, { count, avoid, kidMode }) {
           .map((t) => `- ${t}`)
           .join("\n")}`
       : "";
-  return `Välj högst ${count} av de mest intressanta artiklarna nedan och skriv varsin kort svensk artikel.${avoidBlock}\n\nArtiklar:\n${listing}`;
+  // Ingen garanti för webbsökning här, bara urval bland artiklarna
+  // nedan – hintar modellen att prioritera en träff om det finns en,
+  // men kräver det inte (listan kanske inte innehåller något relevant).
+  const topicHintBlock =
+    topicHint && topicHint.trim()
+      ? `\n\nAnvändaren vill särskilt lära sig om "${topicHint.trim()}" just nu – välj gärna en artikel om det ämnet om någon av artiklarna nedan passar, annars välj bara de mest intressanta som vanligt.`
+      : "";
+  return `Välj högst ${count} av de mest intressanta artiklarna nedan och skriv varsin kort svensk artikel.${topicHintBlock}${avoidBlock}\n\nArtiklar:\n${listing}`;
 }
 
 // OpenAI-kompatibelt function-calling-schema (Groq och Mistral delar
@@ -593,7 +608,7 @@ async function callOpenAICompatible(baseUrl, apiKey, model, messages) {
 }
 
 async function writeArticlesFree(providerLabel, { baseUrl, model }, apiKey, input) {
-  const { count, avoid, kidMode } = input;
+  const { count, avoid, kidMode, topicHint } = input;
   const { items: allCandidates, failures: feedFailures } = await fetchAllFeeds(FREE_PIPELINE_FEEDS);
   if (allCandidates.length === 0) {
     throw new Error(`Inga flöden kunde hämtas (${feedFailures.join("; ") || "okänt fel"}).`);
@@ -602,7 +617,7 @@ async function writeArticlesFree(providerLabel, { baseUrl, model }, apiKey, inpu
   const candidates = allCandidates.slice(0, MAX_FREE_CANDIDATES);
   const messages = [
     { role: "system", content: kidMode ? FREE_SYSTEM_PROMPT_KIDS : FREE_SYSTEM_PROMPT },
-    { role: "user", content: buildFreeUserMessage(candidates, { count, avoid, kidMode }) },
+    { role: "user", content: buildFreeUserMessage(candidates, { count, avoid, kidMode, topicHint }) },
   ];
 
   const { articles } = await callOpenAICompatible(baseUrl, apiKey, model, messages);
@@ -684,6 +699,9 @@ async function readInput(request) {
     liked: Array.isArray(body.liked) ? body.liked : [],
     disliked: Array.isArray(body.disliked) ? body.disliked : [],
     avoid: Array.isArray(body.avoid) ? body.avoid.map(String) : [],
+    // Engångsönskan för just den här förfrågan (se buildTopicHintBlock),
+    // inte sparad personalisering – gäller i både vuxen- och barnläget.
+    topicHint: typeof body.topicHint === "string" ? body.topicHint.trim().slice(0, 80) : "",
   };
 }
 
@@ -693,7 +711,7 @@ export default {
       return new Response(null, { headers: corsHeaders() });
     }
     if (request.method !== "POST") {
-      return json({ error: "Använd POST {preferences, liked, disliked, avoid, count}." }, 405);
+      return json({ error: "Använd POST {preferences, liked, disliked, avoid, count, topicHint, kidMode}." }, 405);
     }
     if (!env.ANTHROPIC_API_KEY && !env.GROQ_API_KEY && !env.MISTRAL_API_KEY) {
       return json(

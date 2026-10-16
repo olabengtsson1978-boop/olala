@@ -80,7 +80,12 @@ async function fetchSuggestions() {
 // personalisering (intressen/gillar/ogillar) skickas med – kidMode: true
 // gör att Workern kör ett helt separat, strikt barnsäkert spår istället
 // för den vanliga skrivprocessen. Se worker/worker.js.
-async function fetchKidSuggestions() {
+//
+// topicHint är INTE personalisering: det är en fritextönskan barnet
+// skriver in för just den här förfrågan (t.ex. "dinosaurier"), skickas
+// med en gång och sparas aldrig – till skillnad från vuxnas "Dina
+// intressen" byggs ingen profil upp av den över tid.
+async function fetchKidSuggestions(topicHint) {
   const workerUrl = await getWorkerUrl();
   if (!workerUrl) {
     return { items: [], failures: [], needsSetup: true };
@@ -99,6 +104,7 @@ async function fetchKidSuggestions() {
       count: KID_SUGGESTION_COUNT,
       avoid,
       kidMode: true,
+      topicHint: topicHint ? String(topicHint).trim().slice(0, 80) : undefined,
     });
   } catch (err) {
     return {

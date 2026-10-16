@@ -61,6 +61,12 @@ när du ber om nya förslag.
   (`kidMode`) – inte bara en annan stil på samma prompt. Se "Säkerheten
   i barnversionen" nedan.
 
+  Till skillnad från vuxnas sparade "Dina intressen" finns det INGEN
+  sparad intresseprofil för barnet. Istället finns ett fritextfält
+  ("Idag vill jag lära mig om…") på barn.html som bara gäller nästa
+  tryck på "Visa fler!" – skickas med en gång och sparas aldrig, så
+  ingen profil byggs upp över tid.
+
 ## Köra lokalt
 
 En service worker kräver `http(s)`/`localhost` (inte `file://`), så

@@ -45,8 +45,9 @@ när du ber om nya förslag.
   webbläsarens installationsknapp – fungerar sedan som en fristående
   app, utan att gå via någon app store. Barnsidorna har en egen
   manifest (`manifest-barn.webmanifest`) och en egen ikon (en
-  glödlampa med en blixt i – en "snilleblixt", `icons/icon-kid*.png`)
-  så de går att installera som en EGEN app ("Stash för barn") som
+  glödlampa med en blixt i – en "snilleblixt", med texten "Olala" på
+  de större storlekarna, `icons/icon-kid*.png`) så de går att
+  installera som en EGEN app ("Stash för barn") som
   öppnas direkt på Upptäck-sidan för barn – helt egen ikon och namn på
   hemskärmen/i appväxlaren jämfört med vuxnas blå "Stash", även om de
   delar samma kod och körs från samma adress.

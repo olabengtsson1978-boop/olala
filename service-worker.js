@@ -1,7 +1,7 @@
 // v2: bytt cache-namn (rensar ut allt gammalt) och bytt strategi till
 // nätverk-först, så en ny deploy alltid syns direkt när du är online.
 // Cachen används bara som offline-fallback.
-const CACHE_NAME = "stash-cache-v12";
+const CACHE_NAME = "stash-cache-v13";
 const SHELL_FILES = [
   "index.html",
   "library.html",
@@ -20,6 +20,7 @@ const SHELL_FILES = [
   "review.js",
   "barn.js",
   "manifest.webmanifest",
+  "manifest-barn.webmanifest",
   "icons/icon128.png",
   "icons/icon192.png",
 ];

@@ -43,7 +43,11 @@ när du ber om nya förslag.
   tidigare export.
 - **Installerbar (PWA)**: lägg till på hemskärmen/skrivbordet via
   webbläsarens installationsknapp – fungerar sedan som en fristående
-  app, utan att gå via någon app store.
+  app, utan att gå via någon app store. Barnsidorna har en egen
+  manifest (`manifest-barn.webmanifest`) så de går att installera som
+  en EGEN app ("Stash för barn") som öppnas direkt på Upptäck-sidan för
+  barn – separat ikon på hemskärmen/i appväxlaren från vuxnas "Stash",
+  även om de delar samma kod och körs från samma adress.
 - **Barnversion** (`barn.html`, `barn-bibliotek.html`,
   `barn-repetera.html`): en egen uppsättning sidor för åldern 8–12 år,
   med glad/färgglad stil (`kids.css`) och enklare text. Egna kort,
@@ -232,6 +236,7 @@ enstaka källor eller ämnen. Fortsätt använda ditt omdöme som vuxen.
 | `kids.css` | Lekfull stil för barnsidorna, läses utöver `styles.css` |
 | `worker/worker.js` | Cloudflare Worker: Claude söker på nätet och skriver artiklar (med Groq/Mistral som gratis reservspår om Claude strular), källorna kontrolleras, inkl. det separata barnsäkra spåret (se ovan) |
 | `worker/wrangler.toml` | Driftsättningsinställningar för Workern (`npx wrangler deploy`) |
-| `manifest.webmanifest` | PWA-metadata (namn, ikoner, installationsbeteende) |
+| `manifest.webmanifest` | PWA-metadata för vuxenversionen (namn, startsida index.html, ikoner) |
+| `manifest-barn.webmanifest` | PWA-metadata för barnversionen (eget namn "Stash för barn", startsida barn.html) – gör den installerbar som en egen app |
 | `service-worker.js` | Cachar appskalet för offline-bruk |
 | `icons/` | Appens ikoner (16–512px) |

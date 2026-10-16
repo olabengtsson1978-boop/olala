@@ -46,13 +46,20 @@ när du ber om nya förslag.
   app, utan att gå via någon app store.
 - **Barnversion** (`barn.html`, `barn-bibliotek.html`,
   `barn-repetera.html`): en egen uppsättning sidor för åldern 8–12 år,
-  med glad/färgglad stil (`kids.css`) och enklare text. Delar lagring
-  (kort, stashes, Worker-URL) med vuxenversionen – ställ in Worker-URL
-  en gång på de vanliga sidorna (eller använd standarden), så fungerar
-  det automatiskt på barnsidorna också. Sökningen och skrivandet körs
-  genom ett helt eget, strikt barnsäkert spår i Workern (`kidMode`) –
-  inte bara en annan stil på samma prompt. Se "Säkerheten i
-  barnversionen" nedan.
+  med glad/färgglad stil (`kids.css`) och enklare text. Egna kort,
+  stashes, intressen och "sedda förslag"-historik i helt separat
+  lagring (egna `localStorage`-nycklar, se `storage.js`) – ett barns
+  sparade kort och en vuxens blandas aldrig ihop, syns inte för varandra
+  i biblioteket/repetitionen, och läcker inte in i varandras
+  AI-personalisering. Export/import av säkerhetskopior är också
+  separata filer per version (`stash-backup-*.json` respektive
+  `stash-kid-backup-*.json`). Enda delade inställningen är Worker-URL:en
+  (vilken backend som anropas, inget personligt innehåll) – ställ in
+  den en gång på de vanliga sidorna (eller använd standarden), så
+  fungerar det automatiskt på barnsidorna också. Sökningen och
+  skrivandet körs genom ett helt eget, strikt barnsäkert spår i Workern
+  (`kidMode`) – inte bara en annan stil på samma prompt. Se "Säkerheten
+  i barnversionen" nedan.
 
 ## Köra lokalt
 
@@ -147,6 +154,10 @@ vuxenversionen med en annan stil på:
 - Ingen personalisering skickas med (inga uttalade intressen, inga
   sparade/ogillade exempel) – barnets förslag bygger aldrig på en
   vuxens historik, och ingen beteendeprofil byggs upp kring barnet.
+  Det gäller även rent lagringsmässigt: barnets sparade kort, stashes
+  och "sedda"-historik ligger i egna `localStorage`-nycklar, skilda
+  från vuxenversionens, så de kan aldrig blandas ihop eller läcka in i
+  varandra ens av misstag.
 - Samma källkontroll som vuxenversionen: en artikel utan en bekräftad
   källa (en URL som faktiskt dök upp i sökningen) tas bort.
 - Går något fel (saknad API-nyckel, Claude-fel) visas bara ett
@@ -163,12 +174,12 @@ enstaka källor eller ämnen. Fortsätt använda ditt omdöme som vuxen.
 | `discover.js` | Hämtar nya artiklar via Workern |
 | `speech.js` | Delad talsyntes-funktion (🔊-knappen) |
 | `swipe.js` | Delad svep-gest (spara/hoppa över, kom ihåg/glömde) |
-| `storage.js` | Delad lagrings- och repetitionslogik (Leitner), stashes, flöden, Worker-URL |
+| `storage.js` | Lagrings- och repetitionslogik (Leitner), stashes, flöden, Worker-URL – samma funktionsnamn för vuxen/barn, men kort/stashes/intressen/historik pekar på separata `localStorage`-nycklar beroende på sida (se kommentaren i filen) |
 | `library.html/js` | Bibliotek: sök/filter/redigering, stashes, export/import |
 | `review.html/js` | Repetitionsflödet |
-| `barn.html/js` | Barnversionens Upptäck-sida (egen stil/text, kidMode-granskning) |
-| `barn-bibliotek.html` | Barnversionens bibliotek (återanvänder `library.js`) |
-| `barn-repetera.html` | Barnversionens repetition (återanvänder `review.js`) |
+| `barn.html/js` | Barnversionens Upptäck-sida (egen stil/text, egen lagring, kidMode-granskning) |
+| `barn-bibliotek.html` | Barnversionens bibliotek (återanvänder `library.js`, men mot barnets egen lagring) |
+| `barn-repetera.html` | Barnversionens repetition (återanvänder `review.js`, men mot barnets egen lagring) |
 | `kids.css` | Lekfull stil för barnsidorna, läses utöver `styles.css` |
 | `worker/worker.js` | Cloudflare Worker: Claude söker på nätet, skriver artiklar, källorna kontrolleras, inkl. det separata barnsäkra spåret (se ovan) |
 | `worker/wrangler.toml` | Driftsättningsinställningar för Workern (`npx wrangler deploy`) |

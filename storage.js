@@ -1,15 +1,29 @@
 // Delad lagringslogik. Allt sparas lokalt i webbläsaren (localStorage)
 // – inget skickas till någon server, förutom att RSS-flöden hämtas och
 // AI-kureras via din egen Cloudflare Worker när du ber om nya förslag.
+//
+// Barnsidorna (barn.html, barn-bibliotek.html, barn-repetera.html) delar
+// den här filen och alla dess funktionsnamn med vuxensidorna (så att
+// library.js/review.js kan återanvändas rakt av), men de får ALDRIG peka
+// på samma data: kort, stashes, "sedda förslag"-historik och intressen
+// läses/skrivs till separata nycklar beroende på vilken sida koden körs
+// på, avgjort av filnamnet i location.pathname. Det gör att ett barns
+// sparade kort, stashes och historik aldrig syns för eller läcker in i
+// vuxenversionens AI-personalisering, och tvärtom. Worker-URL:en (vilken
+// backend som anropas) och flödeslistan är fortsatt gemensamma – det är
+// driftsinställningar, inte personligt innehåll.
+const IS_KID_PAGE = (() => {
+  const file = location.pathname.split("/").pop() || "";
+  return file.startsWith("barn");
+})();
 
-const STORAGE_KEY = "stashCards";
-const STASHES_KEY = "stashStashes";
+const STORAGE_KEY = IS_KID_PAGE ? "stashKidCards" : "stashCards";
+const STASHES_KEY = IS_KID_PAGE ? "stashKidStashes" : "stashStashes";
 const FEEDS_KEY = "stashFeeds";
-const SEEN_KEY = "stashSeenSuggestions";
+const SEEN_KEY = IS_KID_PAGE ? "stashKidSeenSuggestions" : "stashSeenSuggestions";
 const WORKER_URL_KEY = "stashWorkerUrl";
-const PREFERENCES_KEY = "stashPreferences";
-const PENDING_SUGGESTIONS_KEY = "stashPendingSuggestions";
-const PENDING_KID_SUGGESTIONS_KEY = "stashPendingKidSuggestions";
+const PREFERENCES_KEY = IS_KID_PAGE ? "stashKidPreferences" : "stashPreferences";
+const PENDING_SUGGESTIONS_KEY = IS_KID_PAGE ? "stashPendingKidSuggestions" : "stashPendingSuggestions";
 
 // Leitner-lådor: hur många dagar tills ett kort dyker upp igen
 // efter att man svarat "Kom ihåg" i den lådan.
@@ -254,23 +268,6 @@ async function savePendingSuggestions(items) {
 async function removePendingSuggestion(link) {
   const items = await getPendingSuggestions();
   await savePendingSuggestions(items.filter((it) => it.link !== link));
-}
-
-// Samma sak, fast för barnsidans förslag – en egen pott så att
-// barnversionens och vuxenversionens "väntande förslag" aldrig blandas
-// ihop eller skriver över varandra, trots att de delar övrig lagring.
-
-async function getPendingKidSuggestions() {
-  return readJSON(PENDING_KID_SUGGESTIONS_KEY, []);
-}
-
-async function savePendingKidSuggestions(items) {
-  writeJSON(PENDING_KID_SUGGESTIONS_KEY, items);
-}
-
-async function removePendingKidSuggestion(link) {
-  const items = await getPendingKidSuggestions();
-  await savePendingKidSuggestions(items.filter((it) => it.link !== link));
 }
 
 // "Sedda" förslag (sparade eller nedtackade) döljs i kommande

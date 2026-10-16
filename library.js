@@ -211,7 +211,7 @@ document.getElementById("export-btn").addEventListener("click", async (e) => {
   const a = document.createElement("a");
   const date = new Date().toISOString().slice(0, 10);
   a.href = url;
-  a.download = `stash-backup-${date}.json`;
+  a.download = `stash-${IS_KID_PAGE ? "kid-" : ""}backup-${date}.json`;
   a.click();
   URL.revokeObjectURL(url);
 });
@@ -232,7 +232,8 @@ document.getElementById("import-file").addEventListener("change", async (e) => {
     alert("Filen kunde inte tolkas som JSON.");
     return;
   }
-  if (!confirm("Detta ersätter allt nuvarande innehåll i Stash med filens innehåll. Fortsätta?")) return;
+  const scope = IS_KID_PAGE ? "barnversionens" : "vuxenversionens";
+  if (!confirm(`Detta ersätter allt nuvarande innehåll i ${scope} Stash med filens innehåll. Fortsätta?`)) return;
   try {
     await importBackup(data);
   } catch (err) {

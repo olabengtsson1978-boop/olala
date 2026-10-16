@@ -1,9 +1,9 @@
-// Barn-versionen av Upptäck. Delar lagring (kort, stashes, Worker-URL)
-// med vuxenversionen i index.html – bara utseendet och AI-granskningen
-// (kidMode: true i discover.js → worker/worker.js, egen strikt prompt)
-// skiljer sig. Worker-URL ställs in av en vuxen på den vanliga
-// Upptäck-sidan (index.html) om standard-Workern inte ska användas; den
-// här sidan bara läser den.
+// Barn-versionen av Upptäck. Egna kort, stashes och historik (separata
+// localStorage-nycklar, se storage.js) – delar bara Worker-URL:en med
+// vuxenversionen i index.html (en vuxen ställer in den där om
+// standard-Workern inte ska användas; den här sidan bara läser den).
+// Dessutom ett eget strikt AI-granskningsspår (kidMode: true i
+// discover.js → worker/worker.js).
 
 function escapeHtml(str) {
   const div = document.createElement("div");
@@ -60,14 +60,14 @@ async function saveSuggestion(items, idx) {
     tags: [],
   });
   await markSeen({ link: it.link, title: it.title }, "saved");
-  await removePendingKidSuggestion(it.link);
+  await removePendingSuggestion(it.link);
   await renderDueCount();
 }
 
 async function skipSuggestion(items, idx) {
   const it = items[idx];
   await markSeen({ link: it.link, title: it.title }, "skipped");
-  await removePendingKidSuggestion(it.link);
+  await removePendingSuggestion(it.link);
 }
 
 // Utfällbar artikeltext med källförteckning.
@@ -145,7 +145,7 @@ function renderSuggestions(items) {
 // Visar sparade förslag direkt; söker bara efter nya när inga finns kvar
 // eller när du uttryckligen ber om det (varje sökning tar tid/kostar).
 async function showPendingOrLoad() {
-  const pending = await getPendingKidSuggestions();
+  const pending = await getPendingSuggestions();
   if (pending.length > 0) {
     renderSuggestions(pending);
     document.getElementById("suggestions-status").textContent = "";
@@ -163,7 +163,7 @@ async function loadSuggestions() {
 
   const { items, failures, needsSetup } = await fetchKidSuggestions();
   refreshBtn.disabled = false;
-  await savePendingKidSuggestions(items);
+  await savePendingSuggestions(items);
   renderSuggestions(items);
 
   if (needsSetup) {

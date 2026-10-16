@@ -74,12 +74,12 @@ async function fetchSuggestions() {
   return { items, failures: data.failures || [], needsSetup: false };
 }
 
-// Ber Workern om nya artiklar åt Barn-sidan. Samma Worker och delade
-// "sedda"-historik (för att undvika upprepning och dubbletter), men
-// INGEN personalisering (intressen/gillar/ogillar) skickas med – och
-// kidMode: true gör att Workern kör ett helt separat, strikt
-// barnsäkert spår istället för den vanliga skrivprocessen. Se
-// worker/worker.js.
+// Ber Workern om nya artiklar åt Barn-sidan. Samma Worker-URL, men en
+// egen "sedda"-historik (se storage.js: barnsidans kort/stashes/historik
+// ligger i egna nycklar, helt skilda från vuxenversionens) och INGEN
+// personalisering (intressen/gillar/ogillar) skickas med – kidMode: true
+// gör att Workern kör ett helt separat, strikt barnsäkert spår istället
+// för den vanliga skrivprocessen. Se worker/worker.js.
 async function fetchKidSuggestions() {
   const workerUrl = await getWorkerUrl();
   if (!workerUrl) {

@@ -169,6 +169,7 @@ button.danger {
   font-size: 13px;
   text-align: center;
   padding: 24px 0;
+  overflow-wrap: break-word;
 }
 
 .links {

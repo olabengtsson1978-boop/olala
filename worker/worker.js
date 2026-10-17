@@ -636,7 +636,21 @@ async function writeArticlesFree(providerLabel, { baseUrl, model }, apiKey, inpu
     })
     .filter(Boolean);
 
-  return { items, failures: [], provider: providerLabel.toLowerCase() };
+  // Gratisspåret har ingen webbsökning – bara det som råkar finnas i
+  // dagens tre flöden just nu – så en ämnesönskan kan bara uppfyllas om
+  // något av flödena faktiskt handlar om det. Förklara det öppet istället
+  // för att tyst strunta i önskan, så det inte ser ut som en bugg.
+  const topicFailures =
+    topicHint && topicHint.trim()
+      ? [
+          {
+            feed: { name: "Ämnesönskan" },
+            message: `Reservläget (${providerLabel}) kan inte söka fritt på nätet – "${topicHint.trim()}" kunde bara matchas mot det som redan fanns i dagens flöden, inte garanterat hittas.`,
+          },
+        ]
+      : [];
+
+  return { items, failures: topicFailures, provider: providerLabel.toLowerCase() };
 }
 
 // ---- Orchestrator: Claude → Groq → Mistral ----

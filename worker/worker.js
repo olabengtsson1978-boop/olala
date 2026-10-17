@@ -10,18 +10,24 @@
 //   1. Claude (bäst kvalitet) – söker fritt på webben via Anthropics
 //      inbyggda web_search/web_fetch-verktyg. Varje källa Claude anger
 //      kontrolleras mot det som faktiskt kom tillbaka från sökningen.
-//   2. Groq (gratis) – ingen inbyggd webbsökning i gratisläget, så den
-//      väljer och skriver istället utifrån riktiga RSS-artiklar som
-//      Workern själv hämtat från en liten lista trovärdiga källor.
-//      Källan är då artikelns egen länk – redan verifierad per
-//      konstruktion, ingen efterhandskontroll behövs.
-//   3. Mistral (gratis) – samma RSS-baserade upplägg som Groq, sista
+//   2. Groq (billigt/ev. gratis) – modellen "groq/compound" har EGEN
+//      inbyggd webbsökning (till skillnad från vanliga Groq-modeller),
+//      så den kan faktiskt söka på det användaren ber om, precis som
+//      Claude-spåret. Compound stödjer inte function-calling-verktyg
+//      samtidigt som sin egen sökning, så svaret bes komma som ett rått
+//      JSON-objekt istället för ett verktygsanrop – källorna kontrolleras
+//      ändå mot sökresultaten (samma princip som Claude-spåret).
+//   3. Mistral (gratis) – ingen inbyggd webbsökning, så den väljer och
+//      skriver istället utifrån riktiga RSS-artiklar som Workern själv
+//      hämtat från en liten lista trovärdiga källor. Källan är då
+//      artikelns egen länk – redan verifierad per konstruktion. Sista
 //      utväg om både Claude och Groq strular.
-// Claude provas först (och används ensam) om den lyckas – gratisspåren
+// Claude provas först (och används ensam) om den lyckas – reservspåren
 // är bara en reserv, inte en permanent nedgradering. Viktigt: ett
-// AVSIKTLIGT tomt resultat (Claude/barnprompten hittade inget passande)
-// räknas INTE som ett fel och leder ALDRIG vidare till nästa leverantör
-// – bara faktiska fel (nätverksfel, slut kredit, API-fel) gör det.
+// AVSIKTLIGT tomt resultat (Claude/Groq/barnprompten hittade inget
+// passande) räknas INTE som ett fel och leder ALDRIG vidare till nästa
+// leverantör – bara faktiska fel (nätverksfel, slut kredit, API-fel) gör
+// det.
 //
 // Inget npm-beroende, inget byggsteg. Driftsätts med `npx wrangler deploy`
 // från den här mappen (se wrangler.toml), eller klistras in rakt av i
@@ -29,7 +35,9 @@
 //
 // Secrets (`npx wrangler secret put NAMN`), minst en krävs:
 //   ANTHROPIC_API_KEY  – console.anthropic.com (betald, bäst kvalitet)
-//   GROQ_API_KEY       – console.groq.com (gratis, inget kreditkort)
+//   GROQ_API_KEY       – console.groq.com (inget kreditkort krävs för kontot;
+//                        compound-sökningen kostar typiskt någon cent per
+//                        hämtning – se README för aktuellt läge)
 //   MISTRAL_API_KEY    – console.mistral.ai (gratis, begränsad kvot)
 // Ingen av dem når ALDRIG webbappen – bara den här servern. Se
 // README.md för hur du skaffar dem.
@@ -40,9 +48,12 @@ const CLAUDE_MODEL = "claude-opus-5-5";
 // under tiden) mindre för ett barns innehåll.
 const KID_CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 // Modellnamn hos gratisleverantörerna ändras då och då – kontrollera
-// console.groq.com/docs/models respektive docs.mistral.ai/getting-started/models
-// om ett av gratisspåren börjar ge "model not found".
-const GROQ_MODEL = "openai/gpt-oss-120b";
+// console.groq.com/docs/compound respektive docs.mistral.ai/getting-started/models
+// om ett av reservspåren börjar ge "model not found" (Groq har retirerat
+// modeller förut, se git-historik). Compound-mini i barnläget: billigare/
+// snabbare, samma princip som Claude Haiku för barn.
+const GROQ_COMPOUND_MODEL = "groq/compound";
+const GROQ_COMPOUND_MODEL_KID = "groq/compound-mini";
 const MISTRAL_MODEL = "mistral-small-latest";
 const DEFAULT_ARTICLE_COUNT = 5;
 const MAX_ARTICLE_COUNT = 8;
@@ -301,16 +312,27 @@ async function readMessageStream(body) {
   return message;
 }
 
+// Går rekursivt igenom en godtycklig JSON-struktur och samlar alla
+// strängvärden som ligger under en nyckel "url" – oavsett exakt skepnad
+// på strukturen. Används för att bygga en lista över URL:er som
+// FAKTISKT förekom i en sökresult-struktur (Claudes tool-result-block
+// eller Groq Compounds executed_tools), så att en modells angivna
+// källor kan kontrolleras mot den – ingen av leverantörerna dokumenterar
+// sin interna sökresultat-form i detalj, så en generisk genomsökning är
+// robustare än att anta exakta fältnamn.
+function collectUrlsDeep(node, into) {
+  if (Array.isArray(node)) return node.forEach((n) => collectUrlsDeep(n, into));
+  if (!node || typeof node !== "object") return;
+  if (typeof node.url === "string") into.add(normalizeUrl(node.url));
+  Object.values(node).forEach((v) => collectUrlsDeep(v, into));
+}
+
 // Samlar alla URL:er som förekommer i resultaten från webbsökning och
 // webbhämtning, så att Claudes angivna källor kan kontrolleras mot dem.
 function collectSeenUrls(content, into) {
-  const visit = (node) => {
-    if (Array.isArray(node)) return node.forEach(visit);
-    if (!node || typeof node !== "object") return;
-    if (typeof node.url === "string") into.add(normalizeUrl(node.url));
-    Object.values(node).forEach(visit);
-  };
-  content.filter((b) => typeof b.type === "string" && b.type.endsWith("_tool_result")).forEach(visit);
+  content
+    .filter((b) => typeof b.type === "string" && b.type.endsWith("_tool_result"))
+    .forEach((b) => collectUrlsDeep(b, into));
 }
 
 function normalizeUrl(raw) {
@@ -406,14 +428,132 @@ async function runClaude(apiKey, input) {
   return { items, failures, provider: "claude" };
 }
 
-// ---- Gratisspåren (Groq/Mistral): RSS i stället för webbsökning ----
+// ---- Groq Compound: riktig webbsökning, utan function-calling ----
 //
-// Ingen av gratisnivåerna ger pålitlig, kostnadsfri webbsökning, så de
-// här spåren väljer och skriver istället utifrån artiklar Workern SJÄLV
-// hämtat från en liten, handplockad lista trovärdiga käll-flöden. Det
-// gör källkontrollen trivial (länken är redan den vi själva hämtade –
-// ingen risk för påhittade URL:er) men begränsar utbudet till det som
-// faktiskt finns i de flödena just nu.
+// "groq/compound" (och "groq/compound-mini") söker på nätet precis som
+// Claude, men stödjer INTE egna function-calling-verktyg samtidigt som
+// sin inbyggda sökning – så return_articles-verktyget från Claude-spåret
+// går inte att återanvända här. Istället instrueras modellen att svara
+// med rått JSON i sitt vanliga textsvar, som sedan tolkas och källorna
+// kontrolleras mot sökresultaten (executed_tools) precis som Claude-
+// spåret kontrollerar mot sina tool-results – samma försiktighetsprincip,
+// bara en annan plats att läsa sökresultaten ifrån.
+
+const COMPOUND_SYSTEM_PROMPT = `Du är redaktör för en svensk kunskapsapp i stil med DeepStash. Använd webbsökning för att hitta genuint förvånande, konkreta "visste du att"-insikter – nya forskningsrön eller tidlösa fakta – och skriv korta, egna artiklar om dem på svenska.
+
+Källkrav:
+- Använd bara trovärdiga, verifierbara källor: vetenskapliga tidskrifter, universitet och forskningsinstitut, myndigheter och internationella organisationer, samt etablerade nyhets- och vetenskapsmedier.
+- Ange bara URL:er som faktiskt kom tillbaka från din webbsökning.
+- Kan något inte beläggas ordentligt, ta inte med det.
+
+Skrivkrav:
+- Variera ämnena inom ramen för användarens intressen. Skriv med egna ord, citera aldrig mer än en kort mening ordagrant.
+- Varje artikel: en rubrik, en "idé" (en fängslande mening, max 160 tecken), en brödtext (120–220 ord), och källorna.
+
+Svara UTESLUTANDE med ett giltigt JSON-objekt av exakt denna form – ingen inledning, ingen förklaring, inga kodblock, ingen text före eller efter:
+{"articles":[{"title":"...","idea":"...","body":"...","sources":[{"title":"...","url":"..."}]}]}
+Hittar du inget tillräckligt bra belagt: svara {"articles":[]}.`;
+
+const COMPOUND_SYSTEM_PROMPT_KIDS = `Du är redaktör för en svensk kunskapsapp i stil med DeepStash, riktad till BARN i åldern 8–12 år. Använd webbsökning för att hitta genuint förvånande men HELT ÅLDERSANPASSADE "visste du att"-fakta, och skriv korta, egna artiklar om dem på enkel svenska.
+
+VIKTIGASTE REGLERNA – följ dem alltid, före allt annat:
+- Sök och skriv ENDAST om ämnen som passar barn 8–12 år rakt igenom: djur och natur, rymden, människokroppen, uppfinningar, vardagsvetenskap, djurrekord, roliga historiska fakta och liknande.
+- Sök ALDRIG efter och ta ALDRIG med källor eller fakta som handlar om (eller ens nämner i förbigående): våld, död eller skador, krig, brott, olyckor eller katastrofer, vuxet eller sexuellt innehåll, droger eller alkohol, politik eller val, eller sådant som kan vara läskigt eller oroväckande.
+- Är du det minsta osäker på om ett ämne eller en källa passar ett barn – välj ett annat ämne istället. Det är mycket bättre med få artiklar än en olämplig.
+- Skriv korta, glada meningar med ett nyfiket, peppigt tonfall. Enkla ord. "Idé"-meningen: max 120 tecken. Brödtexten: 60–120 ord.
+
+Källkrav: ange bara URL:er som faktiskt kom tillbaka från din webbsökning. Kan något inte beläggas ordentligt, ta inte med det.
+
+Hittar du inte tillräckligt många artiklar som är helt lämpliga för ett barn: ta med färre, eller inga alls – det är ett bra och tryggt resultat.
+
+Svara UTESLUTANDE med ett giltigt JSON-objekt av exakt denna form – ingen inledning, ingen förklaring, inga kodblock, ingen text före eller efter:
+{"articles":[{"title":"...","idea":"...","body":"...","sources":[{"title":"...","url":"..."}]}]}
+Är inget helt lämpligt: svara {"articles":[]}.`;
+
+// Modellen ombeds svara med rent JSON, men följer det inte alltid exakt
+// (kodblock, inledande mening m.m.) – prova några rimliga sätt att ändå
+// hitta ett giltigt JSON-objekt i svaret innan vi ger upp.
+function parseJsonLoose(text) {
+  if (!text) throw new Error("Tomt svar.");
+  try {
+    return JSON.parse(text);
+  } catch {}
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1]);
+    } catch {}
+  }
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {}
+  }
+  throw new Error("Kunde inte tolka svaret som JSON.");
+}
+
+async function callGroqCompound(apiKey, model, messages) {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+      "Groq-Model-Version": "latest",
+    },
+    body: JSON.stringify({ model, messages }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const message = data.choices?.[0]?.message;
+  if (!message) throw new Error("Inget svar från Groq.");
+  return message;
+}
+
+async function writeArticlesCompound(apiKey, input) {
+  const { kidMode } = input;
+  const messages = [
+    { role: "system", content: kidMode ? COMPOUND_SYSTEM_PROMPT_KIDS : COMPOUND_SYSTEM_PROMPT },
+    { role: "user", content: buildUserMessage(input) },
+  ];
+  const model = kidMode ? GROQ_COMPOUND_MODEL_KID : GROQ_COMPOUND_MODEL;
+  const message = await callGroqCompound(apiKey, model, messages);
+
+  const seenUrls = new Set();
+  collectUrlsDeep(message.executed_tools || [], seenUrls);
+
+  const parsed = parseJsonLoose(message.content || "");
+  const articles = Array.isArray(parsed.articles) ? parsed.articles : [];
+  return { articles, seenUrls };
+}
+
+// Samma form som runClaude: kastar vidare (ger orchestratorn chansen att
+// falla tillbaka på Mistral) bara vid ett faktiskt fel – ett avsiktligt
+// tomt articles-resultat är giltigt och stannar här.
+async function runGroqCompound(apiKey, input) {
+  const { articles, seenUrls } = await writeArticlesCompound(apiKey, input);
+  const items = verifyArticles(articles, seenUrls);
+  const dropped = articles.length - items.length;
+  const failures =
+    dropped > 0
+      ? [{ feed: { name: "Källkontroll" }, message: `${dropped} artikel(ar) togs bort eftersom källorna inte kunde bekräftas.` }]
+      : [];
+  return { items, failures, provider: "groq" };
+}
+
+// ---- Mistral: RSS i stället för webbsökning ----
+//
+// Mistrals vanliga API ger ingen pålitlig, kostnadsfri webbsökning, så
+// det här spåret väljer och skriver istället utifrån artiklar Workern
+// SJÄLV hämtat från en liten, handplockad lista trovärdiga käll-flöden.
+// Det gör källkontrollen trivial (länken är redan den vi själva hämtade
+// – ingen risk för påhittade URL:er) men begränsar utbudet till det som
+// faktiskt finns i de flödena just nu. Sista utväg om både Claude och
+// Groq strular.
 
 const FREE_PIPELINE_FEEDS = [
   { name: "Smithsonian Magazine – Science & Nature", url: "https://www.smithsonianmag.com/rss/science-nature/" },
@@ -678,12 +818,7 @@ async function getArticlesFrom(env, input, attempts) {
 
   if (env.GROQ_API_KEY) {
     try {
-      return await writeArticlesFree(
-        "Groq",
-        { baseUrl: "https://api.groq.com/openai/v1/chat/completions", model: GROQ_MODEL },
-        env.GROQ_API_KEY,
-        input
-      );
+      return await runGroqCompound(env.GROQ_API_KEY, input);
     } catch (err) {
       attempts.push(`Groq: ${err.message || err}`);
     }

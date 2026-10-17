@@ -132,27 +132,37 @@ Eller via Cloudflares dashboard, ~5 minuter, en gång:
 
 Fungerar det inte: felmeddelandet från Workern visas ovanför förslagen.
 
-### Gratis reservläge (Groq/Mistral) om Claude-kontot får slut på kredit
+### Reservläge (Groq/Mistral) om Claude-kontot får slut på kredit
 
 Workern provar upp till tre AI-leverantörer i ordning – **Claude**
-(bäst kvalitet, kräver betalkredit) → **Groq** (gratis) → **Mistral**
-(gratis) – och faller bara vidare till nästa om den föregående faktiskt
+(bäst kvalitet, kräver betalkredit) → **Groq** → **Mistral** (sista
+utväg) – och faller bara vidare till nästa om den föregående faktiskt
 misslyckas (t.ex. slut kredit, nätverksfel). Hittar Claude medvetet
 inga passande artiklar (särskilt vanligt i barnläget) räknas det INTE
-som ett fel och ingen gratisleverantör kontaktas – då visas bara "inga
+som ett fel och ingen reservleverantör kontaktas – då visas bara "inga
 nya förslag" som vanligt.
 
-Gratisleverantörerna har ingen kostnadsfri webbsökning, så de väljer
-och skriver istället utifrån några handplockade, trovärdiga RSS-källor
-(Smithsonian, ScienceDaily, NASA) som Workern hämtar själv – källan blir
-artikelns egen länk, redan verifierad per konstruktion.
+**Groq** använder modellen `groq/compound`, som till skillnad från
+vanliga Groq-modeller har **riktig webbsökning inbyggd** – precis som
+Claude-spåret kan den alltså faktiskt söka efter det du skriver i
+"Idag vill jag lära mig om…"-fältet, inte bara välja bland redan
+hämtat material. Inget kreditkort krävs för Groq-kontot, och
+sökningarna kostar typiskt bråkdelar av en krona per hämtning (se
+[groq.com/pricing](https://groq.com/pricing) för aktuellt läge – har
+varit gratis under beta, men kontrollera själv).
+
+**Mistral** har ingen inbyggd webbsökning i sin vanliga API, så det
+spåret väljer och skriver istället utifrån några handplockade,
+trovärdiga RSS-källor (Smithsonian, ScienceDaily, NASA) som Workern
+hämtar själv – källan blir artikelns egen länk, redan verifierad per
+konstruktion, men en ämnesönskan kan bara uppfyllas om den råkar finnas
+i dagens flöden (appen säger det öppet när så är fallet).
 
 Valfritt att sätta upp, men rekommenderat som krockkudde mot precis det
 scenariot i skärmdumpen ovan ("Your credit balance is too low"):
 
-1. **Groq** (gratis, inget kreditkort): skapa konto på
-   [console.groq.com](https://console.groq.com/) → **API Keys** →
-   **Create API Key**.
+1. **Groq**: skapa konto på [console.groq.com](https://console.groq.com/)
+   → **API Keys** → **Create API Key**.
 2. **Mistral** (gratis, begränsad kvot): skapa konto på
    [console.mistral.ai](https://console.mistral.ai/) → **API Keys** →
    **Create new key**.
@@ -169,7 +179,7 @@ scenariot i skärmdumpen ovan ("Your credit balance is too low"):
    Groq direkt, osv.). Saknas samtliga tre visas ett tydligt
    felmeddelande om att ingen leverantör är inställd.
 
-När ett gratisspår faktiskt användes visas en liten diskret notis ovanför
+När ett reservspår faktiskt användes visas en liten diskret notis ovanför
 förslagen ("Hämtat via gratisläget Groq …"), så du vet att det inte var
 Claude som skrev artiklarna den gången.
 
@@ -237,7 +247,7 @@ enstaka källor eller ämnen. Fortsätt använda ditt omdöme som vuxen.
 | `barn-bibliotek.html` | Barnversionens bibliotek (återanvänder `library.js`, men mot barnets egen lagring) |
 | `barn-repetera.html` | Barnversionens repetition (återanvänder `review.js`, men mot barnets egen lagring) |
 | `kids.css` | Lekfull stil för barnsidorna, läses utöver `styles.css` |
-| `worker/worker.js` | Cloudflare Worker: Claude söker på nätet och skriver artiklar (med Groq/Mistral som gratis reservspår om Claude strular), källorna kontrolleras, inkl. det separata barnsäkra spåret (se ovan) |
+| `worker/worker.js` | Cloudflare Worker: Claude söker på nätet och skriver artiklar (med Groq Compound och Mistral som reservspår om Claude strular), källorna kontrolleras, inkl. det separata barnsäkra spåret (se ovan) |
 | `worker/wrangler.toml` | Driftsättningsinställningar för Workern (`npx wrangler deploy`) |
 | `manifest.webmanifest` | PWA-metadata för vuxenversionen (namn, startsida index.html, ikoner) |
 | `manifest-barn.webmanifest` | PWA-metadata för barnversionen (eget namn "Stash för barn", startsida barn.html) – gör den installerbar som en egen app |

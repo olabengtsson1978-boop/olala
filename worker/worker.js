@@ -222,7 +222,20 @@ async function callClaude(apiKey, messages, { kidMode } = {}) {
       max_tokens: 16000,
       output_config: { effort: "medium" },
       fallbacks: "default",
-      system: kidMode ? SYSTEM_PROMPT_KIDS : SYSTEM_PROMPT,
+      // Systemprompten (och därmed verktygslistan ovanför den, eftersom
+      // API:et renderar tools → system → messages och en cache_control-
+      // brytpunkt cachar allt innan den också) är identisk vid varje
+      // anrop – kidMode-varianten likaså, bara en annan fast text. En
+      // ephemeral cache_control-brytpunkt här låter Anthropic återanvända
+      // den cachade prefixen (tools+system) mellan anrop inom samma
+      // ~5-minutersfönster (och mellan varje tur i writeArticles fortsätt-
+      // nings-loop nedan) till en bråkdel av priset istället för att
+      // betala fullt pris för samma text varje gång. Själva meddelandena
+      // (preferences/avoid/topicHint, som varierar per förfrågan) ligger
+      // efter brytpunkten och cachas aldrig – precis avsikten.
+      system: [
+        { type: "text", text: kidMode ? SYSTEM_PROMPT_KIDS : SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+      ],
       tools: [
         // Färre sökningar/hämtningar i barnläget: lägre kostnad och en
         // mindre yta av webben Claude ens läser under tiden.

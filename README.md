@@ -132,6 +132,16 @@ Eller via Cloudflares dashboard, ~5 minuter, en gång:
 
 Fungerar det inte: felmeddelandet från Workern visas ovanför förslagen.
 
+**Prompt-cachning**: systemprompten och verktygslistan till Claude är
+identiska vid varje anrop (bara den lilla frågan om antal/intressen/
+ämnesönskan varierar), så de skickas med en `cache_control`-brytpunkt –
+Anthropic kan då återanvända den delen av prompten till en bråkdel av
+priset istället för att debitera den på nytt varje gång, så länge två
+anrop sker inom cache-fönstret (~5 min). Systempromptarna är dock i underkant av gränsen för vad som ens går
+att cacha (uppskattningsvis ~350–450 token, plus verktygslistan) –
+effekten kan alltså utebli i praktiken, särskilt i barnläget (Haiku).
+Kostar aldrig mer än innan, bara ibland lite mindre.
+
 ### Reservläge (Groq/Mistral) om Claude-kontot får slut på kredit
 
 Workern provar upp till tre AI-leverantörer i ordning – **Claude**

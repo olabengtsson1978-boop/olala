@@ -42,7 +42,7 @@ const KID_CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 // Modellnamn hos gratisleverantörerna ändras då och då – kontrollera
 // console.groq.com/docs/models respektive docs.mistral.ai/getting-started/models
 // om ett av gratisspåren börjar ge "model not found".
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "openai/gpt-oss-120b";
 const MISTRAL_MODEL = "mistral-small-latest";
 const DEFAULT_ARTICLE_COUNT = 5;
 const MAX_ARTICLE_COUNT = 8;

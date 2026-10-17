@@ -643,6 +643,14 @@ async function writeArticlesFree(providerLabel, { baseUrl, model }, apiKey, inpu
 
 async function getArticles(env, input) {
   const attempts = [];
+  const result = await getArticlesFrom(env, input, attempts);
+  // Visa varför tidigare leverantörer hoppades över, så ett tyst byte
+  // till reservspåret (t.ex. slut på Claude-krediter) syns i appen.
+  const skipped = attempts.map((a) => ({ feed: { name: "Reserv används" }, message: a }));
+  return { ...result, failures: [...skipped, ...(result.failures || [])] };
+}
+
+async function getArticlesFrom(env, input, attempts) {
 
   if (env.ANTHROPIC_API_KEY) {
     try {

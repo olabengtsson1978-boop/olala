@@ -187,16 +187,32 @@ async function loadSuggestions() {
 
   if (needsSetup) {
     status.innerHTML = "Spara en Worker-URL under \"AI-kuratering\" nedan för att hämta förslag.";
-  } else if (failures.length > 0) {
-    status.innerHTML = failures
-      .map((f) => `<strong>${escapeHtml(f.feed.name)}</strong>: ${escapeHtml(f.message)}`)
-      .join("<br>");
+    return;
+  }
+
+  // Varje felmeddelande (varför en tidigare leverantör hoppades över,
+  // t.ex. "Reserv används: Groq: ...") OCH en tydlig notis om provider
+  // faktiskt kostade Anthropic-kredit visas tillsammans – det senare får
+  // inte "döljas bakom" det förra bara för att båda råkar finnas, annars
+  // syns aldrig det viktigaste: att Claude användes den här gången.
+  const parts = [];
+  if (failures.length > 0) {
+    parts.push(
+      failures.map((f) => `<strong>${escapeHtml(f.feed.name)}</strong>: ${escapeHtml(f.message)}`).join("<br>")
+    );
+  }
+  // Groq ligger först och Mistral näst (se worker.js) just för att spara
+  // Claude-kredit till annat – provider "claude" betyder att BÅDA strulat.
+  if (provider === "claude") {
+    parts.push(`<span style="color:#888;">ℹ️ Hämtat via Claude (kostar Anthropic-kredit) eftersom varken Groq eller Mistral kunde nås just nu.</span>`);
+  } else if (provider === "mistral") {
+    parts.push(`<span style="color:#888;">ℹ️ Hämtat via reservläget Mistral eftersom Groq inte kunde nås just nu.</span>`);
+  }
+
+  if (parts.length > 0) {
+    status.innerHTML = parts.join("<br>");
   } else if (items.length === 0) {
     status.textContent = "Inga nya förslag just nu.";
-  } else if (provider && provider !== "claude") {
-    status.innerHTML = `<span style="color:#888;">ℹ️ Hämtat via gratisläget ${
-      provider === "groq" ? "Groq" : "Mistral"
-    } eftersom Claude inte kunde nås just nu.</span>`;
   } else {
     status.textContent = "";
   }

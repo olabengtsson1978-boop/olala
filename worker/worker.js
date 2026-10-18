@@ -5,26 +5,29 @@
 // och skriva ihop egna korta artiklar på svenska med källorna angivna –
 // ungefär som de kondenserade korten i riktiga DeepStash.
 //
-// TRE leverantörer, provade i ordning, så att appen fortsätter fungera
-// även om Claude-kontot får slut på kredit (vilket annars stoppar allt):
-//   1. Claude (bäst kvalitet) – söker fritt på webben via Anthropics
-//      inbyggda web_search/web_fetch-verktyg. Varje källa Claude anger
-//      kontrolleras mot det som faktiskt kom tillbaka från sökningen.
-//   2. Groq (billigt/ev. gratis) – modellen "groq/compound" har EGEN
+// TRE leverantörer, provade i ordning. Claude sparas medvetet till sist
+// (och används bara om både Groq och Mistral strular) – tanken är att
+// hålla Claude-kontots kredit fri för annat, inte att den här appen ska
+// vara förstahandsförbrukaren av den:
+//   1. Groq (billigt/ev. gratis) – modellen "groq/compound" har EGEN
 //      inbyggd webbsökning (till skillnad från vanliga Groq-modeller),
 //      så den kan faktiskt söka på det användaren ber om, precis som
 //      Claude-spåret. Compound stödjer inte function-calling-verktyg
 //      samtidigt som sin egen sökning, så svaret bes komma som ett rått
 //      JSON-objekt istället för ett verktygsanrop – källorna kontrolleras
 //      ändå mot sökresultaten (samma princip som Claude-spåret).
-//   3. Mistral (gratis) – ingen inbyggd webbsökning, så den väljer och
+//   2. Mistral (gratis) – ingen inbyggd webbsökning, så den väljer och
 //      skriver istället utifrån riktiga RSS-artiklar som Workern själv
 //      hämtat från en liten lista trovärdiga källor. Källan är då
-//      artikelns egen länk – redan verifierad per konstruktion. Sista
-//      utväg om både Claude och Groq strular.
-// Claude provas först (och används ensam) om den lyckas – reservspåren
-// är bara en reserv, inte en permanent nedgradering. Viktigt: ett
-// AVSIKTLIGT tomt resultat (Claude/Groq/barnprompten hittade inget
+//      artikelns egen länk – redan verifierad per konstruktion.
+//   3. Claude (bäst kvalitet, kostar av din Anthropic-kredit) – söker
+//      fritt på webben via Anthropics inbyggda web_search/web_fetch-
+//      verktyg. Varje källa Claude anger kontrolleras mot det som
+//      faktiskt kom tillbaka från sökningen. Sista utväg om både Groq
+//      och Mistral strular.
+// Groq provas först (och används ensam) om den lyckas – de andra två är
+// bara en reserv, inte en permanent nedgradering. Viktigt: ett
+// AVSIKTLIGT tomt resultat (Groq/Claude/barnprompten hittade inget
 // passande) räknas INTE som ett fel och leder ALDRIG vidare till nästa
 // leverantör – bara faktiska fel (nätverksfel, slut kredit, API-fel) gör
 // det.
@@ -34,11 +37,17 @@
 // Cloudflares dashboard ("Create Worker" → "Quick edit").
 //
 // Secrets (`npx wrangler secret put NAMN`), minst en krävs:
-//   ANTHROPIC_API_KEY  – console.anthropic.com (betald, bäst kvalitet)
 //   GROQ_API_KEY       – console.groq.com (inget kreditkort krävs för kontot;
 //                        compound-sökningen kostar typiskt någon cent per
-//                        hämtning – se README för aktuellt läge)
-//   MISTRAL_API_KEY    – console.mistral.ai (gratis, begränsad kvot)
+//                        hämtning – se README för aktuellt läge). Provas
+//                        FÖRST.
+//   MISTRAL_API_KEY    – console.mistral.ai (gratis, begränsad kvot).
+//                        Provas näst.
+//   ANTHROPIC_API_KEY  – console.anthropic.com (betald, bäst kvalitet).
+//                        Sista utväg – sätt den här bara om du vill att
+//                        olala ska få använda Claude-kredit när båda de
+//                        andra strular. Lämna den osatt om Claude-kontot
+//                        helt ska gå till annat.
 // Ingen av dem når ALDRIG webbappen – bara den här servern. Se
 // README.md för hur du skaffar dem.
 
@@ -806,28 +815,22 @@ async function writeArticlesFree(providerLabel, { baseUrl, model }, apiKey, inpu
   return { items, failures: topicFailures, provider: providerLabel.toLowerCase() };
 }
 
-// ---- Orchestrator: Claude → Groq → Mistral ----
+// ---- Orchestrator: Groq → Mistral → Claude ----
+//
+// Claude ligger sist med flit: olala ska inte vara förstahandsförbrukaren
+// av Claude-kredit som används till annat. Den provas bara om både Groq
+// och Mistral strular (eller saknar secret).
 
 async function getArticles(env, input) {
   const attempts = [];
   const result = await getArticlesFrom(env, input, attempts);
   // Visa varför tidigare leverantörer hoppades över, så ett tyst byte
-  // till reservspåret (t.ex. slut på Claude-krediter) syns i appen.
+  // till reservspåret syns i appen.
   const skipped = attempts.map((a) => ({ feed: { name: "Reserv används" }, message: a }));
   return { ...result, failures: [...skipped, ...(result.failures || [])] };
 }
 
 async function getArticlesFrom(env, input, attempts) {
-
-  if (env.ANTHROPIC_API_KEY) {
-    try {
-      return await runClaude(env.ANTHROPIC_API_KEY, input);
-    } catch (err) {
-      attempts.push(`Claude: ${err.message || err}`);
-    }
-  } else {
-    attempts.push("Claude: ANTHROPIC_API_KEY saknas.");
-  }
 
   if (env.GROQ_API_KEY) {
     try {
@@ -835,6 +838,8 @@ async function getArticlesFrom(env, input, attempts) {
     } catch (err) {
       attempts.push(`Groq: ${err.message || err}`);
     }
+  } else {
+    attempts.push("Groq: GROQ_API_KEY saknas.");
   }
 
   if (env.MISTRAL_API_KEY) {
@@ -847,6 +852,14 @@ async function getArticlesFrom(env, input, attempts) {
       );
     } catch (err) {
       attempts.push(`Mistral: ${err.message || err}`);
+    }
+  }
+
+  if (env.ANTHROPIC_API_KEY) {
+    try {
+      return await runClaude(env.ANTHROPIC_API_KEY, input);
+    } catch (err) {
+      attempts.push(`Claude: ${err.message || err}`);
     }
   }
 

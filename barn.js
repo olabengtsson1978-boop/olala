@@ -169,12 +169,23 @@ async function loadSuggestions() {
 
   if (needsSetup) {
     status.innerHTML = "Be en vuxen ställa in detta på \"Upptäck\"-sidan (för vuxna) först! 🙋";
-  } else if (failures.length > 0) {
-    status.innerHTML = failures.map((f) => escapeHtml(f.message)).join("<br>");
+    return;
+  }
+
+  // Reservläge-notisen får inte "försvinna bakom" felmeddelanden om
+  // varför tidigare spår hoppades över – båda visas tillsammans.
+  const parts = [];
+  if (failures.length > 0) {
+    parts.push(failures.map((f) => escapeHtml(f.message)).join("<br>"));
+  }
+  if (provider && provider !== "groq") {
+    parts.push(`<span style="color:#888;">ℹ️ Hämtat via reservläget just nu, men lika noga granskat! 🙂</span>`);
+  }
+
+  if (parts.length > 0) {
+    status.innerHTML = parts.join("<br>");
   } else if (items.length === 0) {
     status.textContent = "Inga nya fakta just nu – prova igen om ett tag! 🙂";
-  } else if (provider && provider !== "claude") {
-    status.innerHTML = `<span style="color:#888;">ℹ️ Hämtat via reservläget just nu, men lika noga granskat! 🙂</span>`;
   } else {
     status.textContent = "";
   }

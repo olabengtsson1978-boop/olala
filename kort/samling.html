@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Kortkoll – samling</title>
+  <meta name="theme-color" content="#1f7a4d">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon128.png">
+  <link rel="apple-touch-icon" href="icons/icon192.png">
+  <link rel="stylesheet" href="kort.css">
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">⚽ Kortkoll</span>
+    <a href="index.html">Skanna</a>
+    <a href="samling.html" class="active">Samling (<span id="count">0</span>)</a>
+  </nav>
+
+  <div class="summary">
+    <div class="stat"><div class="k">Uppskattat värde</div><div class="v" id="total">–</div></div>
+    <div class="stat"><div class="k">Antal kort</div><div class="v" id="n">0</div></div>
+    <div class="stat"><div class="k">Dyraste</div><div class="v" id="top">–</div></div>
+  </div>
+
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="Sök spelare, lag, serie…">
+    <select id="sort" aria-label="Sortera">
+      <option value="value">Värde</option>
+      <option value="added">Senast tillagd</option>
+      <option value="player">Spelare</option>
+    </select>
+  </div>
+
+  <div class="collection" id="list"></div>
+
+  <details class="settings">
+    <summary>Inställningar och säkerhetskopia</summary>
+    <p>
+      Korten sparas bara i den här webbläsaren. Exportera då och då så
+      du inte tappar samlingen om webbläsardata rensas.
+    </p>
+    <div class="actions">
+      <button id="export-btn">Exportera (JSON)</button>
+      <button id="import-btn">Importera…</button>
+      <input type="file" id="import-input" accept="application/json,.json" hidden>
+    </div>
+    <p style="margin-top:18px;">
+      Cloudflare Worker som analyserar korten (samma som Stash använder,
+      se README.md):
+    </p>
+    <div class="row">
+      <input type="text" id="worker-url" placeholder="https://din-worker.workers.dev">
+      <button id="save-worker-btn">Spara</button>
+    </div>
+  </details>
+
+  <dialog id="detail">
+    <div class="close-row"><button id="close-btn" aria-label="Stäng">✕</button></div>
+    <div class="dialog-body" id="detail-body"></div>
+  </dialog>
+
+  <script src="kort.js"></script>
+  <script>
+    const listEl = document.getElementById("list");
+    const dialog = document.getElementById("detail");
+    const detailBody = document.getElementById("detail-body");
+
+    function matches(entry, q) {
+      if (!q) return true;
+      const c = entry.card || {};
+      return [c.player, c.team, c.set, c.manufacturer, c.year, c.variant]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+    }
+
+    function render() {
+      const cards = getCards();
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      const sort = document.getElementById("sort").value;
+      const value = (e) => (e.valuation ? e.valuation.typical || 0 : 0);
+
+      const total = cards.reduce((s, e) => s + value(e), 0);
+      const top = cards.reduce((best, e) => (value(e) > value(best || {}) ? e : best), null);
+      document.getElementById("total").textContent = sek(total);
+      document.getElementById("n").textContent = String(cards.length);
+      document.getElementById("top").textContent = top ? sek(value(top)) : "–";
+      updateCountBadge();
+
+      const shown = cards.filter((e) => matches(e, q));
+      if (sort === "value") shown.sort((a, b) => value(b) - value(a));
+      if (sort === "player") shown.sort((a, b) => cardTitle(a.card).localeCompare(cardTitle(b.card), "sv"));
+
+      if (cards.length === 0) {
+        listEl.replaceChildren(
+          h("div", { class: "empty" }, "Inga kort än. ", h("a", { href: "index.html" }, "Skanna ditt första kort →"))
+        );
+        return;
+      }
+      if (shown.length === 0) {
+        listEl.replaceChildren(h("div", { class: "empty" }, "Inga kort matchar sökningen."));
+        return;
+      }
+      listEl.replaceChildren(
+        ...shown.map((e) =>
+          h(
+            "button",
+            { class: "item", onclick: () => openDetail(e.id) },
+            h("img", { src: e.thumb || "", alt: "" }),
+            h(
+              "div",
+              { class: "info" },
+              h("div", { class: "name" }, cardTitle(e.card), e.card.rookie ? " · RC" : ""),
+              h("div", { class: "meta" }, cardSubtitle(e.card) || "Serie okänd")
+            ),
+            h("div", { class: "val" }, e.valuation ? sek(e.valuation.typical) : "–")
+          )
+        )
+      );
+    }
+
+    function openDetail(id) {
+      const entry = getCards().find((c) => c.id === id);
+      if (!entry) return;
+      const status = h("div", { class: "status" });
+
+      const revalueBtn = h("button", { class: "primary", onclick: async () => {
+        revalueBtn.disabled = true;
+        status.className = "status";
+        status.replaceChildren(h("span", { class: "spinner" }), "Söker efter aktuella priser…");
+        try {
+          const data = await revalue(entry.card);
+          if (!data.valuation) throw new Error("Ingen ny värdering kunde tas fram.");
+          const history = [...(entry.history || []), { at: data.valuation.valuedAt, typical: data.valuation.typical }].slice(-20);
+          updateCard(id, { valuation: data.valuation, provider: data.provider, notes: data.notes, history });
+          render();
+          openDetail(id);
+        } catch (err) {
+          status.className = "status error";
+          status.replaceChildren(`Det gick inte: ${err.message}`);
+          revalueBtn.disabled = false;
+        }
+      } }, "Värdera igen");
+
+      const deleteBtn = h("button", { class: "danger", onclick: () => {
+        if (!confirm(`Ta bort ${cardTitle(entry.card)} från samlingen?`)) return;
+        deleteCard(id);
+        dialog.close();
+        render();
+      } }, "Ta bort");
+
+      const history = (entry.history || []).filter((x) => x.typical != null);
+      const historyView =
+        history.length > 1 &&
+        h(
+          "div",
+          null,
+          h("h2", null, "Värdehistorik"),
+          h(
+            "ul",
+            { class: "comps" },
+            history
+              .slice()
+              .reverse()
+              .map((x) => h("li", null, h("span", null, new Date(x.at).toLocaleDateString("sv-SE")), h("span", { class: "price" }, sek(x.typical))))
+          )
+        );
+
+      detailBody.replaceChildren(
+        renderResult({ ...entry, notes: entry.notes }),
+        historyView || "",
+        h("div", { class: "actions" }, revalueBtn, deleteBtn),
+        status,
+        h("p", { class: "muted" }, `Tillagd ${new Date(entry.addedAt).toLocaleDateString("sv-SE")}`)
+      );
+      if (!dialog.open) dialog.showModal();
+    }
+
+    document.getElementById("close-btn").addEventListener("click", () => dialog.close());
+    dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+    document.getElementById("search").addEventListener("input", render);
+    document.getElementById("sort").addEventListener("change", render);
+
+    document.getElementById("export-btn").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify({ app: "kortkoll", version: 1, cards: getCards() }, null, 1)], { type: "application/json" });
+      const a = h("a", { href: URL.createObjectURL(blob), download: `kortkoll-${new Date().toISOString().slice(0, 10)}.json` });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+
+    const importInput = document.getElementById("import-input");
+    document.getElementById("import-btn").addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", async () => {
+      const file = importInput.files && importInput.files[0];
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        if (!data || !Array.isArray(data.cards)) throw new Error("Filen är ingen Kortkoll-export.");
+        const existing = getCards();
+        const ids = new Set(existing.map((c) => c.id));
+        const added = data.cards.filter((c) => c && c.id && c.card && !ids.has(c.id));
+        saveCards([...added, ...existing]);
+        alert(`${added.length} kort importerades.`);
+        render();
+      } catch (err) {
+        alert(`Importen misslyckades: ${err.message}`);
+      } finally {
+        importInput.value = "";
+      }
+    });
+
+    const workerInput = document.getElementById("worker-url");
+    workerInput.value = getWorkerUrl();
+    document.getElementById("save-worker-btn").addEventListener("click", () => {
+      setWorkerUrl(workerInput.value);
+      workerInput.value = getWorkerUrl();
+    });
+
+    render();
+    registerServiceWorker();
+  </script>
+</body>
+</html>

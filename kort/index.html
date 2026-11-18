@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Kortkoll – skanna</title>
+  <meta name="theme-color" content="#1f7a4d">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon128.png">
+  <link rel="apple-touch-icon" href="icons/icon192.png">
+  <link rel="stylesheet" href="kort.css">
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">⚽ Kortkoll</span>
+    <a href="index.html" class="active">Skanna</a>
+    <a href="samling.html">Samling (<span id="count">0</span>)</a>
+  </nav>
+
+  <h1>Fotografera ett fotbollskort</h1>
+  <p class="lead">
+    Ta ett skarpt foto rakt framifrån i bra ljus. Baksidan är valfri men
+    gör identifieringen säkrare – där står ofta år, serie och kortnummer.
+  </p>
+
+  <div class="slots">
+    <label class="slot required" id="slot-front">
+      <span class="icon">📷</span>
+      <span>Framsida</span>
+      <input type="file" accept="image/*" capture="environment" id="front-input">
+    </label>
+    <label class="slot" id="slot-back">
+      <span class="icon">↩️</span>
+      <span>Baksida<br>(valfritt)</span>
+      <input type="file" accept="image/*" capture="environment" id="back-input">
+    </label>
+  </div>
+
+  <input type="text" id="note" maxlength="200" placeholder="Vet du något om kortet? T.ex. &quot;Panini VM 2014&quot; (valfritt)">
+
+  <button class="primary big" id="scan-btn" disabled>Identifiera och värdera</button>
+
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+  <div id="result"></div>
+
+  <script src="kort.js"></script>
+  <script>
+    const state = { front: null, back: null, thumb: null, result: null };
+    const scanBtn = document.getElementById("scan-btn");
+    const statusEl = document.getElementById("status");
+    const resultEl = document.getElementById("result");
+
+    function setStatus(text, { error = false, busy = false } = {}) {
+      statusEl.className = "status" + (error ? " error" : "");
+      statusEl.replaceChildren(busy ? h("span", { class: "spinner" }) : "", text || "");
+    }
+
+    function setupSlot(side) {
+      const slot = document.getElementById(`slot-${side}`);
+      const input = document.getElementById(`${side}-input`);
+      const original = [...slot.childNodes];
+
+      function reset() {
+        state[side] = null;
+        if (side === "front") state.thumb = null;
+        input.value = "";
+        slot.classList.remove("filled");
+        slot.replaceChildren(...original);
+        scanBtn.disabled = !state.front;
+      }
+
+      input.addEventListener("change", async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+          setStatus("Förbereder bilden…", { busy: true });
+          state[side] = await resizeImage(file, 1280, 0.85);
+          if (side === "front") state.thumb = await resizeImage(file, 420, 0.75);
+          setStatus("");
+        } catch (err) {
+          setStatus(err.message, { error: true });
+          return;
+        }
+        slot.classList.add("filled");
+        slot.replaceChildren(
+          // input först: den ska vara labelns kontroll, inte ✕-knappen.
+          input,
+          h("img", { src: state[side], alt: side === "front" ? "Framsida" : "Baksida" }),
+          h("button", { class: "clear", type: "button", "aria-label": "Ta bort bild", onclick: (e) => { e.preventDefault(); reset(); } }, "✕")
+        );
+        scanBtn.disabled = !state.front;
+      });
+    }
+
+    setupSlot("front");
+    setupSlot("back");
+
+    scanBtn.addEventListener("click", async () => {
+      if (!state.front) return;
+      scanBtn.disabled = true;
+      resultEl.replaceChildren();
+      const started = Date.now();
+      const tick = () => {
+        const s = Math.round((Date.now() - started) / 1000);
+        setStatus(`Läser kortet och letar efter sålda exemplar… ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`, { busy: true });
+      };
+      tick();
+      const timer = setInterval(tick, 1000);
+      try {
+        const images = [state.front, state.back].filter(Boolean);
+        const data = await scanCard(images, document.getElementById("note").value.trim());
+        state.result = data;
+        setStatus("");
+        showResult(data);
+      } catch (err) {
+        setStatus(`Det gick inte: ${err.message}`, { error: true });
+      } finally {
+        clearInterval(timer);
+        scanBtn.disabled = !state.front;
+      }
+    });
+
+    function showResult(data) {
+      const view = renderResult({ ...data, thumb: state.thumb });
+      const actions = h("div", { class: "actions" });
+      if (data.card && data.card.isCard) {
+        const saveBtn = h("button", { class: "primary", onclick: () => {
+          try {
+            addCard({ card: data.card, valuation: data.valuation, provider: data.provider, thumb: state.thumb });
+            saveBtn.textContent = "Sparat ✓";
+            saveBtn.disabled = true;
+            updateCountBadge();
+          } catch (err) {
+            setStatus(err.message, { error: true });
+          }
+        } }, "Spara i samlingen");
+        actions.append(saveBtn);
+      }
+      actions.append(h("button", { onclick: () => location.reload() }, "Skanna nytt kort"));
+      resultEl.replaceChildren(view, actions);
+      view.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    updateCountBadge();
+    registerServiceWorker();
+  </script>
+</body>
+</html>

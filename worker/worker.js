@@ -866,8 +866,497 @@ async function getArticlesFrom(env, input, attempts) {
   throw new Error(`Alla AI-leverantörer misslyckades. ${attempts.join(" | ")}`);
 }
 
-async function readInput(request) {
-  const body = await request.json().catch(() => ({}));
+// ==== Kortkoll: fotografera ett fotbollskort → identifiering + värdering ====
+//
+// Samma Worker, samma secrets, men ett eget spår som väljs med
+// { mode: "cardScan", images: [dataUrl, …], note } (ett nytt foto) eller
+// { mode: "cardRevalue", card: {…} } (ny värdering av ett redan
+// identifierat kort, utan att skicka bilden igen). Används av webbappen i
+// kort/. Samma leverantörsordning som artiklarna (Groq → Mistral →
+// Claude) och samma försiktighetsprincip: varje jämförelseförsäljning
+// måste ha en URL som faktiskt dök upp i sökningen, annars stryks den och
+// värderingen märks som en obekräftad uppskattning.
+//
+//   Groq:    qwen3.8-27b (bildstöd) identifierar kortet, sedan söker
+//            groq/compound efter faktiskt sålda exemplar.
+//   Mistral: mistral-medium-3-5 (bildstöd) identifierar och uppskattar
+//            värdet utifrån sin egen kunskap – ingen webbsökning, så
+//            värderingen märks alltid som obekräftad.
+//   Claude:  ser bilden och söker själv på nätet i ett och samma anrop.
+//
+// Modellnamnen ändras då och då – se console.groq.com/docs/vision och
+// docs.mistral.ai om ett spår börjar ge "model not found".
+
+const CARD_GROQ_VISION_MODEL = "qwen/qwen3.8-27b";
+const CARD_GROQ_SEARCH_MODEL = "groq/compound";
+const CARD_MISTRAL_MODEL = "mistral-medium-3-5";
+const MAX_CARD_IMAGES = 2;
+// ~2 MB base64 per bild räcker gott – appen skalar ner till ~1280 px.
+const MAX_CARD_IMAGE_CHARS = 2_800_000;
+
+const CARD_FIELDS_DOC = `"card": {
+  "isCard": true/false (false om bilden inte visar ett samlarkort),
+  "player": "spelarens namn" | null,
+  "team": "lag på kortet" | null,
+  "year": "år eller säsong, t.ex. 2018 eller 2019-20" | null,
+  "manufacturer": "t.ex. Panini, Topps, Upper Deck, Futera, Merlin" | null,
+  "set": "serie, t.ex. Prizm World Cup, Chrome UEFA Champions League, Adrenalyn XL" | null,
+  "cardNumber": "kortnummer, t.ex. 12 eller RC-7" | null,
+  "variant": "parallell/variant, t.ex. Silver Prizm, Gold Refractor /50, bas" | null,
+  "rookie": true/false,
+  "autograph": true/false,
+  "memorabilia": true/false (tröjbit/patch),
+  "serialNumber": "numrering som syns, t.ex. 23/99" | null,
+  "grading": { "company": "PSA/BGS/SGC/CGC", "grade": "t.ex. 9" } | null (bara om kortet ligger i en graderad slab),
+  "condition": "kort svensk bedömning av synligt skick: hörn, kanter, yta, centrering",
+  "conditionEstimate": "grov uppskattning, t.ex. 'ungefär PSA 7–8' – ett foto räcker aldrig för exakt gradering",
+  "facts": "2–4 meningar på svenska om spelaren och kortet: varför det är intressant/eftertraktat, upplaga, rookie-år osv.",
+  "searchQuery": "kort engelsk sökfras för att hitta sålda exemplar, t.ex. '2018 Panini Prizm World Cup Mbappe #80 Silver PSA 10'",
+  "confidence": "hög" | "medel" | "låg",
+  "uncertainties": "vad du är osäker på, eller tom sträng"
+}`;
+
+const VALUATION_FIELDS_DOC = `"valuation": {
+  "currency": "SEK",
+  "low": tal i SEK,
+  "typical": tal i SEK,
+  "high": tal i SEK,
+  "basis": "1–3 meningar på svenska om vad värderingen bygger på, inkl. växelkurs du använt",
+  "comparables": [ { "title": "annonsens rubrik", "price": tal, "currency": "originalvaluta, t.ex. USD", "priceSek": tal, "date": "försäljningsdatum om känt", "url": "länk", "sold": true/false } ],
+  "marketNote": "kort råd på svenska: t.ex. om det kan löna sig att gradera, var sådana kort brukar säljas, trend"
+}`;
+
+const CARD_IDENTIFY_PROMPT = `Du är expert på fotbollskort (samlarkort från Panini, Topps, Upper Deck, Futera, Score, Merlin m.fl., även äldre svenska serier). Du får foto av framsidan och ibland baksidan av ett kort. Identifiera kortet så exakt som möjligt utifrån det som FAKTISKT SYNS: läs namn, logotyper, årtal, kortnummer, copyright-raden på baksidan, numrering (t.ex. 12/99), parallellfärg/refractor-mönster, autograf, tröjbit och graderingsetikett om kortet ligger i en slab.
+
+Hitta aldrig på detaljer: sätt null där du inte kan avgöra och beskriv osäkerheten. Var försiktig med skicket – ett foto räcker inte för en exakt gradering.
+
+Svara ENDAST med ett JSON-objekt, utan annan text:
+{ ${CARD_FIELDS_DOC} }`;
+
+const CARD_VALUE_PROMPT = `Du värderar fotbollskort åt en svensk samlare. Använd webbsökning för att hitta FAKTISKT SÅLDA exemplar (helst, inte bara utropspriser) av exakt samma kort – samma år, serie, kortnummer, parallell/numrering och samma gradering eller ett jämförbart skick. Bra källor: eBay (sålda annonser), 130point, Tradera, Cardmarket, PSA Auction Prices, Card Ladder, PWCC/Fanatics Collect, Goldin.
+
+Regler:
+- Varje jämförelse ska ha en url som du faktiskt såg i dina sökresultat. Hitta aldrig på länkar eller priser.
+- Räkna om till svenska kronor och ange växelkursen i "basis".
+- Ett ograderat kort är normalt värt klart mindre än en PSA 10 – justera för skicket som beskrivs.
+- Hittar du inga jämförbara försäljningar: säg det öppet i "basis", lämna "comparables" tom och ge en försiktig uppskattning.
+
+Svara ENDAST med ett JSON-objekt, utan annan text:
+{ ${VALUATION_FIELDS_DOC} }`;
+
+const CARD_ESTIMATE_PROMPT = `${CARD_IDENTIFY_PROMPT.replace(
+  /Svara ENDAST[\s\S]*$/,
+  ""
+)}Uppskatta sedan kortets ungefärliga marknadsvärde i SEK utifrån din egen kunskap om samlarmarknaden. Du kan INTE söka på nätet, så lämna "comparables" tom och skriv i "basis" att det är en grov uppskattning utan aktuell prisdata.
+
+Svara ENDAST med ett JSON-objekt, utan annan text:
+{ ${CARD_FIELDS_DOC},
+  ${VALUATION_FIELDS_DOC} }`;
+
+const CARD_CLAUDE_PROMPT = `${CARD_IDENTIFY_PROMPT.replace(/Svara ENDAST[\s\S]*$/, "")}När kortet är identifierat: värdera det.
+
+${CARD_VALUE_PROMPT.replace(/Svara ENDAST[\s\S]*$/, "")}Lämna resultatet genom att anropa verktyget return_card exakt en gång, med fälten:
+{ ${CARD_FIELDS_DOC},
+  ${VALUATION_FIELDS_DOC} }
+ Är bilden inte ett samlarkort: anropa return_card med isCard false och valuation null, utan att söka.`;
+
+const RETURN_CARD_TOOL = {
+  name: "return_card",
+  description: "Lämna identifieringen och värderingen av kortet.",
+  input_schema: {
+    type: "object",
+    properties: {
+      card: { type: "object", description: "Identifieringen, enligt fälten i instruktionen." },
+      valuation: { type: ["object", "null"], description: "Värderingen, enligt fälten i instruktionen." },
+    },
+    required: ["card"],
+  },
+};
+
+function readCardImages(body) {
+  const raw = Array.isArray(body.images) ? body.images.slice(0, MAX_CARD_IMAGES) : [];
+  const images = raw
+    .map((url) => {
+      if (typeof url !== "string" || url.length > MAX_CARD_IMAGE_CHARS) return null;
+      const m = url.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
+      return m ? { dataUrl: url, mediaType: m[1], data: m[2] } : null;
+    })
+    .filter(Boolean);
+  if (images.length === 0) {
+    throw new Error("Ingen giltig bild skickades (JPEG/PNG/WebP som data-URL, max ~2 MB).");
+  }
+  return images;
+}
+
+function cardNoteText(note) {
+  const n = typeof note === "string" ? note.trim().slice(0, 200) : "";
+  return n ? `\n\nSamlarens egen anteckning om kortet (kan vara fel, men ta hänsyn till den): "${n}"` : "";
+}
+
+function stripThinking(text) {
+  return String(text || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+}
+
+const str = (v, max = 400) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+const num = (v) => {
+  const n = typeof v === "number" ? v : Number(String(v ?? "").replace(/[^\d.,-]/g, "").replace(",", "."));
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+};
+
+function shapeCard(raw) {
+  const c = raw && typeof raw === "object" ? raw : {};
+  const grading =
+    c.grading && typeof c.grading === "object" && str(c.grading.company)
+      ? { company: str(c.grading.company, 20), grade: str(String(c.grading.grade ?? ""), 20) }
+      : null;
+  return {
+    isCard: c.isCard !== false,
+    player: str(c.player, 120),
+    team: str(c.team, 120),
+    year: str(c.year != null ? String(c.year) : null, 20),
+    manufacturer: str(c.manufacturer, 80),
+    set: str(c.set, 160),
+    cardNumber: str(c.cardNumber != null ? String(c.cardNumber) : null, 30),
+    variant: str(c.variant, 120),
+    rookie: c.rookie === true,
+    autograph: c.autograph === true,
+    memorabilia: c.memorabilia === true,
+    serialNumber: str(c.serialNumber, 30),
+    grading,
+    condition: str(c.condition, 600),
+    conditionEstimate: str(c.conditionEstimate, 120),
+    facts: str(c.facts, 1200),
+    searchQuery: str(c.searchQuery, 200),
+    confidence: ["hög", "medel", "låg"].includes(c.confidence) ? c.confidence : "låg",
+    uncertainties: str(c.uncertainties, 600) || "",
+  };
+}
+
+// seenUrls === null betyder "ingen sökning gjordes" (Mistral): då finns
+// inget att kontrollera mot och värderingen märks alltid obekräftad.
+function shapeValuation(raw, seenUrls) {
+  if (!raw || typeof raw !== "object") return null;
+  const all = Array.isArray(raw.comparables) ? raw.comparables : [];
+  const comparables = (seenUrls ? all : [])
+    .filter((c) => c && typeof c.url === "string" && seenUrls.has(normalizeUrl(c.url)))
+    .slice(0, 8)
+    .map((c) => ({
+      title: str(c.title, 200) || hostLabel(c.url),
+      price: num(c.price),
+      currency: str(c.currency, 8) || "",
+      priceSek: num(c.priceSek),
+      date: str(c.date != null ? String(c.date) : null, 40),
+      url: c.url,
+      source: hostLabel(c.url),
+      sold: c.sold !== false,
+    }));
+  let low = num(raw.low);
+  let typical = num(raw.typical);
+  let high = num(raw.high);
+  if (low == null && high == null && typical == null) return null;
+  typical = typical ?? Math.round(((low ?? high) + (high ?? low)) / 2);
+  low = low ?? typical;
+  high = high ?? typical;
+  if (low > high) [low, high] = [high, low];
+  return {
+    currency: "SEK",
+    low,
+    typical,
+    high,
+    basis: str(raw.basis, 800) || "",
+    marketNote: str(raw.marketNote, 600) || "",
+    comparables,
+    droppedComparables: seenUrls ? Math.max(0, all.length - comparables.length) : 0,
+    verified: comparables.length > 0,
+    valuedAt: new Date().toISOString(),
+  };
+}
+
+function cardSummaryForSearch(card) {
+  return JSON.stringify(
+    {
+      player: card.player,
+      team: card.team,
+      year: card.year,
+      manufacturer: card.manufacturer,
+      set: card.set,
+      cardNumber: card.cardNumber,
+      variant: card.variant,
+      rookie: card.rookie,
+      autograph: card.autograph,
+      memorabilia: card.memorabilia,
+      serialNumber: card.serialNumber,
+      grading: card.grading,
+      conditionEstimate: card.conditionEstimate,
+      searchQuery: card.searchQuery,
+    },
+    null,
+    1
+  );
+}
+
+// ---- Groq: bildmodell identifierar, compound söker priser ----
+
+async function callGroqChat(apiKey, body) {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}`, "Groq-Model-Version": "latest" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = await res.json();
+  const message = data.choices?.[0]?.message;
+  if (!message) throw new Error("Inget svar från Groq.");
+  return message;
+}
+
+async function identifyCardGroq(apiKey, images, note) {
+  const message = await callGroqChat(apiKey, {
+    model: CARD_GROQ_VISION_MODEL,
+    messages: [
+      { role: "system", content: CARD_IDENTIFY_PROMPT },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: `Här är kortet (${images.length === 2 ? "framsida och baksida" : "framsida"}).${cardNoteText(note)}` },
+          ...images.map((img) => ({ type: "image_url", image_url: { url: img.dataUrl } })),
+        ],
+      },
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0.2,
+  });
+  const parsed = parseJsonLoose(stripThinking(message.content));
+  return shapeCard(parsed.card || parsed);
+}
+
+async function valueCardGroq(apiKey, card) {
+  const message = await callGroqChat(apiKey, {
+    model: CARD_GROQ_SEARCH_MODEL,
+    messages: [
+      { role: "system", content: CARD_VALUE_PROMPT },
+      { role: "user", content: `Kortet som ska värderas:\n${cardSummaryForSearch(card)}` },
+    ],
+  });
+  const seenUrls = new Set();
+  collectUrlsDeep(message.executed_tools || [], seenUrls);
+  const parsed = parseJsonLoose(stripThinking(message.content));
+  return shapeValuation(parsed.valuation || parsed, seenUrls);
+}
+
+// ---- Mistral: bild + uppskattning utan webbsökning ----
+
+async function scanCardMistral(apiKey, images, note) {
+  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: CARD_MISTRAL_MODEL,
+      messages: [
+        { role: "system", content: CARD_ESTIMATE_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Här är kortet.${cardNoteText(note)}` },
+            ...images.map((img) => ({ type: "image_url", image_url: img.dataUrl })),
+          ],
+        },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.2,
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = await res.json();
+  const parsed = parseJsonLoose(data.choices?.[0]?.message?.content || "");
+  const card = shapeCard(parsed.card || parsed);
+  return { card, valuation: card.isCard ? shapeValuation(parsed.valuation, null) : null };
+}
+
+async function revalueCardMistral(apiKey, card) {
+  const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: CARD_MISTRAL_MODEL,
+      messages: [
+        {
+          role: "system",
+          content: `Du värderar fotbollskort åt en svensk samlare utifrån din egen kunskap om samlarmarknaden. Du kan INTE söka på nätet: lämna "comparables" tom och skriv i "basis" att det är en grov uppskattning utan aktuell prisdata.\n\nSvara ENDAST med JSON: { ${VALUATION_FIELDS_DOC} }`,
+        },
+        { role: "user", content: `Kortet:\n${cardSummaryForSearch(card)}` },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.2,
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data = await res.json();
+  const parsed = parseJsonLoose(data.choices?.[0]?.message?.content || "");
+  return shapeValuation(parsed.valuation || parsed, null);
+}
+
+// ---- Claude: ser bilden och söker själv ----
+
+async function callClaudeCard(apiKey, messages) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "server-side-fallback-2026-07-01",
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 16000,
+      output_config: { effort: "medium" },
+      fallbacks: "default",
+      system: [{ type: "text", text: CARD_CLAUDE_PROMPT, cache_control: { type: "ephemeral" } }],
+      tools: [
+        { type: "web_search_20260209", name: "web_search", max_uses: 6 },
+        { type: "web_fetch_20260209", name: "web_fetch", max_uses: 3 },
+        RETURN_CARD_TOOL,
+      ],
+      tool_choice: { type: "auto" },
+      messages,
+      stream: true,
+    }),
+  });
+  if (!res.ok) throw new Error(`Claude API HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return readMessageStream(res.body);
+}
+
+async function runCardClaude(apiKey, firstUserContent) {
+  const messages = [{ role: "user", content: firstUserContent }];
+  const seenUrls = new Set();
+  let nudged = false;
+  for (let turn = 0; turn <= MAX_CONTINUATIONS + 1; turn++) {
+    const data = await callClaudeCard(apiKey, messages);
+    if (data.stop_reason === "refusal") throw new Error("Claude avböjde förfrågan.");
+    const content = data.content || [];
+    collectSeenUrls(content, seenUrls);
+    const call = content.find((b) => b.type === "tool_use" && b.name === "return_card");
+    if (call) return { input: call.input || {}, seenUrls };
+    messages.push({ role: "assistant", content });
+    if (data.stop_reason === "pause_turn") continue;
+    if (nudged) break;
+    nudged = true;
+    messages.push({ role: "user", content: "Anropa return_card nu med det du kommit fram till." });
+  }
+  throw new Error("Claude lämnade inget resultat.");
+}
+
+async function scanCardClaude(apiKey, images, note) {
+  const { input, seenUrls } = await runCardClaude(apiKey, [
+    ...images.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } })),
+    { type: "text", text: `Identifiera och värdera kortet på bilden${images.length === 2 ? "erna (framsida och baksida)" : ""}.${cardNoteText(note)}` },
+  ]);
+  const card = shapeCard(input.card);
+  return { card, valuation: card.isCard ? shapeValuation(input.valuation, seenUrls) : null };
+}
+
+async function revalueCardClaude(apiKey, card) {
+  const { input, seenUrls } = await runCardClaude(apiKey, [
+    { type: "text", text: `Kortet är redan identifierat – värdera det (ingen bild behövs). Lämna card oförändrat.\n${cardSummaryForSearch(card)}` },
+  ]);
+  return shapeValuation(input.valuation, seenUrls);
+}
+
+// ---- Orkestrering: Groq → Mistral → Claude ----
+
+function withAttempts(result, attempts) {
+  const notes = attempts.map((a) => ({ name: "Reserv används", message: a }));
+  return { ...result, notes: [...notes, ...(result.notes || [])] };
+}
+
+function valuationNotes(valuation) {
+  if (!valuation || !valuation.droppedComparables) return [];
+  return [
+    {
+      name: "Källkontroll",
+      message: `${valuation.droppedComparables} jämförelse(r) togs bort eftersom länken inte kunde bekräftas i sökresultaten.`,
+    },
+  ];
+}
+
+async function scanCard(env, body) {
+  const images = readCardImages(body);
+  const note = body.note;
+  const attempts = [];
+
+  if (env.GROQ_API_KEY) {
+    try {
+      const card = await identifyCardGroq(env.GROQ_API_KEY, images, note);
+      if (!card.isCard) return withAttempts({ card, valuation: null, provider: "groq" }, attempts);
+      const valuation = await valueCardGroq(env.GROQ_API_KEY, card);
+      return withAttempts({ card, valuation, provider: "groq", notes: valuationNotes(valuation) }, attempts);
+    } catch (err) {
+      attempts.push(`Groq: ${err.message || err}`);
+    }
+  } else {
+    attempts.push("Groq: GROQ_API_KEY saknas.");
+  }
+
+  if (env.MISTRAL_API_KEY) {
+    try {
+      const result = await scanCardMistral(env.MISTRAL_API_KEY, images, note);
+      return withAttempts({ ...result, provider: "mistral" }, attempts);
+    } catch (err) {
+      attempts.push(`Mistral: ${err.message || err}`);
+    }
+  }
+
+  if (env.ANTHROPIC_API_KEY) {
+    try {
+      const result = await scanCardClaude(env.ANTHROPIC_API_KEY, images, note);
+      return withAttempts({ ...result, provider: "claude", notes: valuationNotes(result.valuation) }, attempts);
+    } catch (err) {
+      attempts.push(`Claude: ${err.message || err}`);
+    }
+  }
+
+  throw new Error(`Alla AI-leverantörer misslyckades. ${attempts.join(" | ")}`);
+}
+
+// Ny värdering av ett sparat kort: bara pris-steget, ingen bild. Mistral
+// provas sist här, eftersom den inte kan söka efter aktuella priser –
+// poängen med att värdera om är just färska priser.
+async function revalueCard(env, body) {
+  const card = shapeCard(body.card);
+  if (!card.isCard || (!card.player && !card.searchQuery)) {
+    throw new Error("Kortet saknar uppgifter att värdera (spelare eller sökfras).");
+  }
+  const attempts = [];
+
+  if (env.GROQ_API_KEY) {
+    try {
+      const valuation = await valueCardGroq(env.GROQ_API_KEY, card);
+      return withAttempts({ valuation, provider: "groq", notes: valuationNotes(valuation) }, attempts);
+    } catch (err) {
+      attempts.push(`Groq: ${err.message || err}`);
+    }
+  }
+  if (env.ANTHROPIC_API_KEY) {
+    try {
+      const valuation = await revalueCardClaude(env.ANTHROPIC_API_KEY, card);
+      return withAttempts({ valuation, provider: "claude", notes: valuationNotes(valuation) }, attempts);
+    } catch (err) {
+      attempts.push(`Claude: ${err.message || err}`);
+    }
+  }
+  if (env.MISTRAL_API_KEY) {
+    try {
+      const valuation = await revalueCardMistral(env.MISTRAL_API_KEY, card);
+      return withAttempts({ valuation, provider: "mistral" }, attempts);
+    } catch (err) {
+      attempts.push(`Mistral: ${err.message || err}`);
+    }
+  }
+  throw new Error(`Alla AI-leverantörer misslyckades. ${attempts.join(" | ")}`);
+}
+
+function readInput(body) {
   const kidMode = body.kidMode === true;
   const count = Math.min(
     Math.max(Number(body.count) || DEFAULT_ARTICLE_COUNT, 1),
@@ -903,7 +1392,14 @@ export default {
       );
     }
 
-    const input = await readInput(request);
+    const body = await request.json().catch(() => ({}));
+    // Kortkoll (kort/): eget spår, se "Kortkoll" ovan.
+    const job =
+      body.mode === "cardScan"
+        ? () => scanCard(env, body)
+        : body.mode === "cardRevalue"
+          ? () => revalueCard(env, body)
+          : () => getArticles(env, readInput(body));
 
     // Sökandet tar ofta mer än 100 s, då Cloudflare annars avbryter med
     // 524. Svaret börjar därför direkt och hålls vid liv med blanksteg
@@ -917,7 +1413,7 @@ export default {
     const work = (async () => {
       let result;
       try {
-        result = await getArticles(env, input);
+        result = await job();
       } catch (err) {
         result = { error: err.message || String(err) };
       }

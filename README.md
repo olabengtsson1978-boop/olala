@@ -75,6 +75,50 @@ ber om nya förslag.
   tryck på "Visa fler!" – skickas med en gång och sparas aldrig, så
   ingen profil byggs upp över tid.
 
+## Kortkoll – värdera fotbollskort (`kort/`)
+
+En andra, fristående webbapp på samma grund (samma Cloudflare Worker,
+samma API-nycklar, samma GitHub Pages-deploy): fotografera ett
+fotbollskort och få veta vilket kort det är, lite fakta om det och en
+värdering baserad på faktiskt sålda exemplar. Öppna `kort/index.html`
+(på GitHub Pages: `<din-sida>/kort/`) och installera den som en egen app
+– den har eget namn, egen ikon och egen manifest.
+
+- **Skanna** (`kort/index.html`): ta ett foto av framsidan (och gärna
+  baksidan, där år/serie/kortnummer brukar stå). Bilden skalas ner till
+  ~1280 px i telefonen innan den skickas till din Worker.
+- **Resultat**: spelare, lag, år, tillverkare, serie, kortnummer,
+  parallell/variant, rookie/autograf/tröjbit/numrering, graderingsetikett
+  om kortet ligger i en slab, en försiktig skicksbedömning, fakta om
+  kortet och ett värde i SEK (typiskt värde + spann) med länkar till
+  jämförbara försäljningar.
+- **Samling** (`kort/samling.html`): spara korten lokalt (miniatyrbild +
+  uppgifter i `localStorage`), se totalvärde, sök/sortera, "Värdera
+  igen" för färska priser (skickar bara kortets uppgifter, inte bilden)
+  med värdehistorik, samt export/import som JSON.
+
+**I Workern** (`mode: "cardScan"` / `"cardRevalue"`, se avsnittet
+"Kortkoll" i `worker/worker.js`) gäller samma leverantörsordning:
+
+1. **Groq**: `qwen/qwen3.8-27b` läser bilden, sedan söker
+   `groq/compound` på nätet efter sålda exemplar (eBay, 130point,
+   Tradera, Cardmarket, PSA m.fl.).
+2. **Mistral** (`mistral-medium-3-5`): läser bilden och ger en
+   uppskattning utifrån sin egen kunskap – ingen webbsökning, så
+   värderingen märks alltid som obekräftad i appen.
+3. **Claude**: ser bilden och söker själv på nätet i samma anrop.
+
+Samma källkontroll som för artiklarna: en jämförelseförsäljning vars
+länk inte faktiskt dök upp i sökresultaten stryks, och finns ingen
+bekräftad jämförelse kvar visas värdet med en tydlig varning om att det
+är en obekräftad uppskattning. Värderingen är alltid en fingervisning –
+skick och gradering påverkar priset mycket, och ett foto räcker inte för
+en exakt gradering.
+
+Har du en egen Worker sedan tidigare måste den **driftsättas om**
+(`cd worker && npx wrangler deploy`, eller klistra in nya `worker.js`)
+för att få med kortspåret. Inga nya secrets behövs.
+
 ## Köra lokalt
 
 En service worker kräver `http(s)`/`localhost` (inte `file://`), så
@@ -256,4 +300,5 @@ enstaka källor eller ämnen. Fortsätt använda ditt omdöme som vuxen.
 | `manifest.webmanifest` | PWA-metadata för vuxenversionen (namn, startsida index.html, ikoner) |
 | `manifest-barn.webmanifest` | PWA-metadata för barnversionen (eget namn "Stash för barn", startsida barn.html) – gör den installerbar som en egen app |
 | `service-worker.js` | Cachar appskalet för offline-bruk |
+| `kort/` | Kortkoll: egen PWA för att fotografera och värdera fotbollskort (`index.html` skanna, `samling.html` samling, `kort.js` delad logik, egen manifest/service worker/ikoner) |
 | `icons/` | Appens ikoner (16–512px); `icon-kid*.png` är barnversionens egna (en glödlampa/blixt) |
